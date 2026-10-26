@@ -1,0 +1,22 @@
+{
+  "_说明": "Ollama 兼容桥的运行配置。改完重启 scripts\\start-all.bat 生效。",
+  "_listen_port": "保持 11434 = Ollama 的默认端口，这样其他程序不用改地址",
+  "_listen_host": "想让局域网内其它机器也能访问，改成 0.0.0.0（注意此时无鉴权）",
+
+  "listen_host": "127.0.0.1",
+  "listen_port": 11434,
+
+  "_upstream": "llama-swap 的地址，由 scripts\\start-all.bat 一并拉起，端口在 llama-swap.yaml 之外的启动参数里",
+  "upstream": "http://127.0.0.1:11435",
+
+  "_ollama_version": "对外报告的 Ollama 版本号，部分客户端会做版本校验",
+  "ollama_version": "0.30.10",
+
+  "_list": "外部客户端拉模型列表（/api/tags 与 /v1/models）时列什么。人格和旧别名默认不列 —— 否则客户端里 7 个模型会显示成 33 个。**不列 ≠ 不能用**：它们照样可以直接按名字调用，本机界面也不受影响（界面走 /admin/state）。想让它们也出现在列表里就把对应项改成 true。",
+  "list": {
+    "personas": false,
+    "aliases": false
+  },
+
+  "log_requests": true
+}

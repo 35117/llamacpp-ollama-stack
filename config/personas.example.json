@@ -1,0 +1,35 @@
+{
+  "_说明": "人格示例文件。首次初始化时会被复制成 config/personas.json；之后由 scripts/apply-personas.bat 从 config/modelfiles/ 重新生成并覆盖。",
+  "_改法": "想加自己的模型：把 gguf 放进 models/，在 bases 里加一条；想加人格：在 personas 里加一条，system_file 指向 config/ 下的相对路径。",
+  "_注意": "persona 的 id 不能与 base 的 id 重名（重名时人格会静默顶掉底座）。",
+
+  "generated_by": "personas.example.json（示例数据，请按自己的模型改写）",
+
+  "bases": {
+    "example-model": {
+      "gguf": "example-model-Q4_K_M.gguf",
+      "file_name": "Example Model",
+      "desc": "把 gguf 改成 models/ 里你真实的文件名；supported 由文件是否存在动态判定",
+      "ctx": 8192,
+      "ollama_alias": [],
+      "params": {},
+      "supported": true,
+      "unsupported_reason": null
+    }
+  },
+
+  "personas": [
+    {
+      "id": "translator",
+      "label": "技术译者",
+      "base": "example-model",
+      "source_modelfile": null,
+      "source_from": null,
+      "system_file": "personas/translator.txt",
+      "params": {}
+    }
+  ],
+
+  "skipped": {},
+  "ollama_aliases": {}
+}

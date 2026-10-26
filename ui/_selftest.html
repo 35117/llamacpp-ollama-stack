@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>界面自检</title>
+<style>body{font:13px/1.6 Consolas,monospace;padding:14px;background:#111;color:#0f0}
+.pass{color:#4ade80}.fail{color:#f87171}.info{color:#93c5fd}</style>
+</head>
+<body>
+<pre id="out">运行中…</pre>
+<iframe id="app" src="/ui" style="width:1200px;height:760px;border:1px solid #333;margin-top:10px"></iframe>
+<script>
+/* 同源 iframe 驱动 /ui 跑一次真实对话。
+ *
+ * 为什么要这么绕：Edge/Chrome 无头模式的 --dump-dom / --screenshot 只在
+ * 「页面 load 完成」时触发一次，而本页要等异步对话结束；用 --virtual-time-budget
+ * 又会把 setTimeout 快进（实测把 15 秒轮询压成几十毫秒，直接误报超时）。
+ * 所以改成：真实等待 + 每一步都 fetch 一个 /ui/__report 地址，
+ * 桥会把请求行写进 logs/bridge.log —— 结果从日志里读，不依赖 dump 时机。
+ */
+const lines = [];
+const out = document.getElementById("out");
+function log(s) {
+  lines.push(s);
+  const d = document.createElement("div");
+  d.textContent = s;
+  out.appendChild(d);
+}
+/* 每条结果单独发一个小包 —— 服务器对请求行长度有上限（65537），
+   之前把 40 行日志塞进一个 URL 里，最后会被截断，读不全。 */
+function report(tag, msg) {
+  const p = {
+    t: tag,
+    m: String(msg == null ? (lines[lines.length - 1] || "") : msg).slice(0, 300),
+    n: lines.length,
+  };
+  fetch("/ui/__report?r=" + encodeURIComponent(JSON.stringify(p)), { cache: "no-store" })
+    .catch(() => {});
+  document.title = "SELFTEST_" + tag;
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+let pass = 0, fail = 0;
+function t(name, cond, detail) {
+  const line = (cond ? "  [PASS] " : "  [FAIL] ") + name + (detail ? "   " + detail : "");
+  if (cond) pass++; else fail++;
+  log(line);
+  report(cond ? "pass" : "fail", line);
+}
+async function waitFor(fn, ms, label) {
+  const t0 = Date.now();
+  let last = null;
+  while (Date.now() - t0 < ms) {
+    try { const v = fn(); if (v) return v; } catch (e) { last = e.message; }
+    await sleep(200);
+  }
+  throw new Error("等待超时(" + ms + "ms): " + label + (last ? " — " + last : ""));
+}
+
+(async () => {
+  report("start");
+  const f = document.getElementById("app");
+  // 关键：iframe 从 about:blank 导航到 /ui 后，contentDocument 会被换成**新对象**。
+  // 一开始就缓存它，拿到的是旧文档，里面永远没有元素（这个坑踩了两次）。
+  const D = () => f.contentDocument;
+  try {
+    const sel = await waitFor(() => {
+      const doc = D();
+      const s = doc && doc.getElementById("model-select");
+      return (s && s.options.length > 0) ? s : null;
+    }, 60000, "模型下拉出现");
+    const d = D();
+    const w = f.contentWindow;
+    w.addEventListener("error", (e) => log("  !! iframe 内 JS 错误: " + e.message));
+    t("应用初始化完成", sel.options.length > 0, "option 数=" + sel.options.length);
+
+    const personaCount = [...sel.options].filter(o => o.parentNode.label === "人格").length;
+    const baseCount = [...sel.options].filter(o => o.parentNode.label.indexOf("干净底座") >= 0).length;
+    // 底座被删/停用的人格**不应该**出现在模型下拉里（选了也跑不起来）；
+    // 所以这里只要求底座数量，人格数量在第 3 条断言里跟人格列表交叉核对。
+    t("下拉里有可用底座", baseCount >= 5, "底座=" + baseCount + " 人格项=" + personaCount);
+
+    // ---- 人格管理弹窗
+    d.getElementById("btn-personas").click();
+    await sleep(1500);
+    const modalOpen = !d.getElementById("persona-modal").classList.contains("hidden");
+    const pItems = d.querySelectorAll("#p-list .p-item").length;
+    t("人格管理弹窗打开并列出人格", modalOpen && pItems >= 10, "列出 " + pItems + " 个");
+
+    // 交叉核对：下拉里的人格数 = 总人格数 − 底座不可用的人格数
+    const deadN = d.querySelectorAll("#p-list .p-item .badge.bad").length;
+    t("模型下拉排除了底座不可用的人格",
+      personaCount === pItems - deadN,
+      "下拉 " + personaCount + " / 共 " + pItems + " − 不可用 " + deadN);
+
+    const firstItem = d.querySelector("#p-list .p-item");
+    if (firstItem) {
+      firstItem.click();
+      await sleep(600);
+      const sysLen = d.getElementById("p-system").value.length;
+      const idVal = d.getElementById("p-id").value;
+      t("点选人格后载入提示词", sysLen > 0 && !!idVal, "id=" + idVal + " / " + sysLen + " 字");
+      t("已有 id 只读", d.getElementById("p-id").disabled === true);
+    }
+    // 新建按钮应清空编辑器
+    d.getElementById("p-new").click();
+    await sleep(400);
+    t("「新建」清空编辑器并开放 id", d.getElementById("p-id").disabled === false
+      && d.getElementById("p-id").value === "");
+    // ---- 换模型后要能改人格的「底座」（这是用户的实际痛点）
+    const pItems2 = [...d.querySelectorAll("#p-list .p-item")];
+    const deadItem = pItems2.find(el => el.querySelector(".pmeta .badge.bad"));
+    t("列表标出「底座不可用」的人格", !!deadItem,
+      deadItem ? deadItem.querySelector(".pid").textContent.trim() : "一个都没有");
+    if (deadItem) {
+      deadItem.click();
+      await sleep(700);
+      const baseSel = d.getElementById("p-base");
+      const note = d.getElementById("p-base-note");
+      t("底座下拉不再被锁死", baseSel.disabled === false);
+      t("明确提示当前底座不可用", note.textContent.indexOf("不可用") >= 0,
+        note.textContent.trim().slice(0, 40));
+      t("提供「同底座一起改」选项",
+        d.getElementById("p-bulk-wrap").style.display !== "none"
+        && d.getElementById("p-bulk-base").textContent.length > 0,
+        d.getElementById("p-bulk-base").textContent.trim());
+      const opts = [...baseSel.options];
+      t("不可用底座在下拉里也列出（置灰）",
+        opts.some(o => o.disabled && o.value === baseSel.value),
+        "共 " + opts.length + " 项，置灰 " + opts.filter(o => o.disabled).length + " 项");
+      const good = opts.find(o => !o.disabled && o.value !== baseSel.value);
+      const oldBase = baseSel.value;
+      baseSel.value = good.value;
+      d.getElementById("p-save").click();
+      await sleep(2500);
+      t("保存后底座指向新模型", d.getElementById("p-base").value === good.value,
+        oldBase + " → " + good.value);
+      t("界面显示「已改底座」", note.textContent.indexOf("改成") >= 0,
+        note.textContent.trim().slice(0, 50));
+      // 还原，别把用户的配置留在测试改过的状态
+      w.confirm = () => true;
+      d.getElementById("p-reset").click();
+      await sleep(1800);
+      t("「还原默认」把底座也退回去了", d.getElementById("p-base").value === oldBase,
+        "现在 " + d.getElementById("p-base").value);
+    }
+
+    d.getElementById("p-close").click();
+    await sleep(300);
+
+    // ---- 真实对话
+    const target = [...sel.options].find(o => o.value.indexOf("qwen35-4b") >= 0)
+                || [...sel.options].find(o => o.value.indexOf("qwen3-8b") >= 0)
+                || sel.options[0];
+    sel.value = target.value;
+    sel.dispatchEvent(new Event("change"));
+    log("  · 用 " + target.value + " 发消息…");
+    const input = d.getElementById("input");
+    input.value = "只回复两个字：收到";
+    input.dispatchEvent(new Event("input"));
+    d.getElementById("btn-send").click();
+    report("chat-sent");
+
+    const reply = await waitFor(() => {
+      const bodies = d.querySelectorAll("#messages .msg.assistant .body");
+      if (!bodies.length) return null;
+      const txt = bodies[bodies.length - 1].textContent.trim();
+      const idle = d.getElementById("btn-send").textContent.indexOf("发送") >= 0;
+      return (txt.length > 0 && idle) ? txt : null;
+    }, 240000, "助手回复出现");
+    t("对话链路可用（发送→流式→渲染）", reply.length > 0,
+      "回复=" + JSON.stringify(reply.slice(0, 40)));
+
+    await sleep(1500);
+    const items = d.querySelectorAll("#chat-list .chat-item").length;
+    t("对话自动存进历史", items >= 1, "历史 " + items + " 条");
+    const titleEl = d.querySelector("#chat-list .ci-title");
+    t("标题取自首条消息", titleEl && titleEl.textContent.indexOf("收到") >= 0,
+      "标题=" + (titleEl ? titleEl.textContent : "无"));
+
+    // ---- 多轮
+    input.value = "再说一遍";
+    input.dispatchEvent(new Event("input"));
+    d.getElementById("btn-send").click();
+    const n2 = await waitFor(() => {
+      const bodies = d.querySelectorAll("#messages .msg.assistant .body");
+      const idle = d.getElementById("btn-send").textContent.indexOf("发送") >= 0;
+      return (bodies.length >= 2 && idle) ? bodies.length : null;
+    }, 240000, "第二轮回复");
+    t("多轮对话可行", n2 >= 2, "助手消息 " + n2 + " 条");
+
+    // ---- 图片附件：粘贴 / 选文件 / 请求体 / 拦截
+    // 这一段把 iframe 里的 fetch 换成一个假响应，这样既能看到界面**真正发出的
+    // 请求体**（含图片），又不用等模型 —— 秒级、确定。真模型能不能看见图，
+    // 由 scripts\test_vision.py 单独跑真实推理来验。
+    const realFetch = w.fetch;
+    let captured = null;
+    w.fetch = function (url, opts) {
+      const u = String(url);
+      if (u.indexOf("/api/chat") >= 0 && opts && opts.body) {
+        try { captured = JSON.parse(opts.body); } catch (e) { /* 忽略 */ }
+        const nd = '{"message":{"content":"（自检假回复）"},"done":true}\n';
+        return Promise.resolve(new Response(nd, {
+          status: 200, headers: { "Content-Type": "application/x-ndjson" },
+        }));
+      }
+      return realFetch.apply(w, arguments);
+    };
+
+    const visionOpt = [...sel.options].find(o => o.textContent.indexOf("🖼") >= 0);
+    t("下拉里标出了可看图的模型", !!visionOpt, visionOpt ? visionOpt.value : "没找到带 🖼 的");
+
+    // 造一张小 PNG 当附件
+    const cv = d.createElement("canvas");
+    cv.width = 24; cv.height = 12;
+    const cx = cv.getContext("2d");
+    cx.fillStyle = "#c00";
+    cx.fillRect(0, 0, 24, 12);
+    const blob = await new Promise(r => cv.toBlob(r, "image/png"));
+    const file = new w.File([blob], "selftest.png", { type: "image/png" });
+    const dd = new DataTransfer();
+    dd.items.add(file);
+
+    // 粘贴（Win+Shift+S 之后 Ctrl+V 就是这条路）
+    d.dispatchEvent(new w.ClipboardEvent("paste", { clipboardData: dd, bubbles: true }));
+    await sleep(900);
+    const nStrip = () => d.querySelectorAll("#attach-strip .attach-item").length;
+    t("粘贴图片后出现在待发区", nStrip() === 1, "条目=" + nStrip());
+
+    // 点 📎 选文件
+    const fi = d.getElementById("file-input");
+    fi.files = dd.files;
+    fi.dispatchEvent(new w.Event("change"));
+    await sleep(900);
+    t("点📎选文件也能加图", nStrip() === 2, "条目=" + nStrip());
+
+    d.querySelector("#attach-strip .attach-item .ax").click();
+    await sleep(300);
+    t("可以移除待发图片", nStrip() === 1, "条目=" + nStrip());
+
+    // 用视觉模型发一次，检查请求体与渲染
+    if (visionOpt) {
+      sel.value = visionOpt.value;
+      sel.dispatchEvent(new Event("change"));
+    }
+    const nBefore = d.querySelectorAll("#messages .msg").length;
+    input.value = "这张图里有什么";
+    input.dispatchEvent(new Event("input"));
+    d.getElementById("btn-send").click();
+    const grew = await waitFor(() => {
+      const n = d.querySelectorAll("#messages .msg").length;
+      const idle = d.getElementById("btn-send").textContent.indexOf("发送") >= 0;
+      return (n > nBefore && idle) ? n : null;
+    }, 30000, "假回复完成");
+    t("用户气泡里渲染出图片", d.querySelectorAll("#messages .msg.user .imgs img").length >= 1,
+      "img=" + d.querySelectorAll("#messages .msg.user .imgs img").length + " 消息=" + grew);
+    const lastUser = captured && [...captured.messages].reverse().find(m => m.role === "user");
+    const img0 = (lastUser && lastUser.images && lastUser.images[0]) || "";
+    t("请求体带上了图片（Ollama 裸 base64）",
+      !!(lastUser && lastUser.images && lastUser.images.length === 1 && img0.length > 50),
+      lastUser ? "images=" + (lastUser.images || []).length + " len=" + img0.length : "没抓到请求");
+    t("发完后待发区清空", nStrip() === 0, "条目=" + nStrip());
+
+    // 非视觉模型 + 有图 → 应当被拦下：不发请求、消息也不增加
+    const plainOpt = [...sel.options].find(
+      o => o.textContent.indexOf("🖼") < 0 && o.parentNode.label.indexOf("干净底座") >= 0);
+    if (plainOpt) {
+      sel.value = plainOpt.value;
+      sel.dispatchEvent(new Event("change"));
+      captured = null;
+      const n0 = d.querySelectorAll("#messages .msg").length;
+      // 注意：这里必须用**新的** DataTransfer。复用同一个会被 input.value="" 清掉
+      // 底层的文件列表，第二次赋值就加不进图了（第一版测试就是这样误报的）。
+      const dd2 = new DataTransfer();
+      dd2.items.add(new w.File([blob], "selftest2.png", { type: "image/png" }));
+      fi.files = dd2.files;
+      fi.dispatchEvent(new w.Event("change"));
+      await sleep(900);
+      const nPending = nStrip();
+      input.value = "看这个";
+      input.dispatchEvent(new Event("input"));
+      d.getElementById("btn-send").click();
+      await sleep(1500);
+      const n1 = d.querySelectorAll("#messages .msg").length;
+      t("非视觉模型下贴图会被拦下", n1 === n0 && captured === null,
+        "待发=" + nPending + " 消息 " + n0 + "->" + n1 + " 请求=" + (captured ? "发了" : "没发"));
+      let guard = 0;
+      while (d.querySelector("#attach-strip .attach-item .ax") && guard++ < 10) {
+        d.querySelector("#attach-strip .attach-item .ax").click();
+        await sleep(150);
+      }
+    }
+    w.fetch = realFetch;
+
+    // ---- 切换人格后应清空当前会话（新对话）
+    d.getElementById("btn-new").click();
+    await sleep(500);
+    const emptied = d.querySelectorAll("#messages .msg").length === 0;
+    t("「新对话」清空消息区", emptied);
+
+    // ---- 从历史重新打开，消息应完整恢复
+    const item = d.querySelector("#chat-list .chat-item");
+    if (item) {
+      item.click();
+      const restored = await waitFor(() => {
+        const n = d.querySelectorAll("#messages .msg").length;
+        return n > 0 ? n : null;
+      }, 20000, "历史会话恢复");
+      t("从历史重新打开可恢复消息", restored >= 3, restored + " 条消息");
+      const hasThink = d.querySelectorAll("#messages .think").length >= 0;
+      t("恢复后页面无异常", d.getElementById("model-select").options.length > 0);
+    } else {
+      t("会话出现在历史列表", false, "列表为空");
+    }
+
+    // ---- 删除会话
+    const before = d.querySelectorAll("#chat-list .chat-item").length;
+    if (before > 0) {
+      w.confirm = () => true;          // 跳过确认弹窗
+      d.querySelector("#chat-list .ci-del").click();
+      await sleep(1500);
+      const after = d.querySelectorAll("#chat-list .chat-item").length;
+      t("删除会话生效", after === before - 1, before + " -> " + after);
+    }
+  } catch (e) {
+    fail++;
+    log("  [FAIL] 异常: " + e.message);
+    log("  --- 诊断 ---");
+    try {
+      const d = f.contentDocument;
+      log("  iframe readyState=" + (d ? d.readyState : "?")
+          + "  select.option=" + (d && d.getElementById("model-select")
+              ? d.getElementById("model-select").options.length : "?")
+          + "  pill-svc=" + (d && d.getElementById("pill-svc")
+              ? d.getElementById("pill-svc").textContent : "?"));
+      const errs = d ? d.querySelectorAll("#toast.show") : [];
+      log("  toast=" + [...errs].map(x => x.textContent).join("|"));
+    } catch (e2) { log("  诊断失败: " + e2.message); }
+  }
+
+  log("");
+  log("===== BROWSER_SELFTEST " + pass + " 通过 / " + fail + " 失败 =====");
+  report(fail ? "FAILED" : "DONE", "通过 " + pass + " / 失败 " + fail);
+  // 让最后一次 fetch 有机会发出去
+  await sleep(1500);
+})();
+</script>
+</body>
+</html>

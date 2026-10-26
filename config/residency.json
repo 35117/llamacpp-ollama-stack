@@ -1,0 +1,23 @@
+{
+  "_说明": "模型驻留策略 —— 谁可以一直占着显存、闲置多久自动让位。改完对桥里的 reaper 线程热生效（不用重启服务）。",
+  "_来源": "实现见 scripts/residency.py；CLI: python scripts\\residency.py get|set|status|list|unload|reap",
+  "_auto_unload": "总开关。关掉后只保留手动卸载。",
+  "auto_unload": true,
+
+  "_idle_ttl": "默认闲置上限（秒）：一个模型最后一次被请求之后，超过这个时间没有新请求就自动卸载。1800 = 30 分钟。",
+  "idle_ttl": 1800,
+
+  "_check_interval": "reaper 多久检查一次（秒）。太小会频繁调 /running，太大则卸载不及时。",
+  "check_interval": 60,
+
+  "_per_model_ttl": "个别模型覆盖默认上限。低频、占显存大的工具排前面。",
+  "per_model_ttl": {
+    "humanizer-12b": 600,
+    "galtransl-7b": 600
+  },
+
+  "_protected": "永不自动卸载的名单（仍可手动卸载）。一般放最常用的聊天模型 —— 它一旦被自动卸掉，下次开口要等约 10 秒重载。",
+  "protected": [
+    "qwen35-4b-heretic"
+  ]
+}

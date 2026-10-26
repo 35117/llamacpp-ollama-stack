@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "updated": "2026-10-02",
+  "note": "海龟汤可选模型清单。只列能当主持人的 chat 模型（翻译/embedding 不在内）；id 必须是 llama-swap 能路由到的名字。评测脚本：bench.py（判题）/ bench_grade.py（打分）/ bench_hint.py（提示）/ calib_leak.py（泄露把关校准）。改完这个文件要重启底座才生效。",
+  "auto": {
+    "label": "自动（按难度）",
+    "desc": "判题时按题目的 difficulty 从题库 model_tiers 取模型；提示/打分回落各自的角色默认"
+  },
+  "models": [
+    {
+      "id": "qwen35-4b-heretic",
+      "label": "Qwen3.5 4B Heretic",
+      "size_gb": 2.71,
+      "vision": true,
+      "note": "判题 92.3% / 打分 MAE 4.9 / 泄露把关 100%（20 条校准）。三项都不输 9B，显存只占一半。"
+    },
+    {
+      "id": "qwen35-9b-heretic",
+      "label": "Qwen3.5 9B Heretic v2",
+      "size_gb": 5.63,
+      "vision": false,
+      "note": "判题 93.2%（与 4B 配对 McNemar p=0.69，在噪声内）/ 打分 MAE 6.5（比 4B 差）/ 把关 95%。"
+    },
+    {
+      "id": "qwen35-9b-abliterated-vision",
+      "label": "Huihui Qwen3.5 9B Abliterated",
+      "size_gb": 5.63,
+      "vision": true,
+      "note": "判题与 9B-heretic 逐条几乎相同（p=1.000）；但泄露把关只有 67% 精确率（错杀一半），配它当提示会让功能退化成「永远兜底」。"
+    }
+  ],
+  "role_defaults": {
+    "judge": "auto",
+    "hint": "qwen35-4b-heretic",
+    "grade": "qwen35-4b-heretic"
+  },
+  "role_notes": {
+    "judge": "热路径，每问一句都要用。三个模型判题能力统计上无差异（两两 McNemar p=0.69~1.00）→ 选最省的 4B：显存 2.71GB、热态 163ms（9B 要 5.63GB / 208ms）。",
+    "hint": "生成类任务，没有 grammar 兜底，最容易泄底。实测 8 道题：4B 生成+4B 把关能交出 5 条有用提示（另 3 条兜底），且被最准的把关判为 0 泄露；9B-heretic 只有 1 条、9B-abliterated 是 0 条（8/8 全兜底）——换大模型不是变好，是把功能废掉。",
+    "grade": "低频操作（玩家报答案时才跑）。4B 的 MAE 4.9 优于 9B-heretic 的 6.5；且与判题同模型 → 零换载。"
+  }
+}

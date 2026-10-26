@@ -1,0 +1,241 @@
+{{GENERATED_HEADER}}
+# ============================================================================
+#  llama-swap 配置 —— llama.cpp 的多模型路由层
+# ----------------------------------------------------------------------------
+#  作用：llama-server 一个进程只能服务一个模型；llama-swap 按请求里的 model
+#        字段自动拉起/切换后端进程，从而对外表现成「一个端口调所有模型」，
+#        也就是你现在 Ollama 的体验。
+#
+#  端口分工：  11434  ← Ollama 兼容桥（对外，见 ollama_bridge.py）
+#              11435  ← 本文件（llama-swap，仅本机）
+#              11500+ ← 各模型的 llama-server 子进程（llama-swap 自动分配）
+#
+#  校验配置：  bin\llama-swap.exe -config config\llama-swap.yaml -validate
+# ============================================================================
+
+healthCheckTimeout: 600      # 从磁盘载入 5GB 权重可能要几十秒，给足时间
+logLevel: info               # info | debug | warn | error
+startPort: 11500             # 后端子进程端口起点
+unloadTimeout: 10
+
+# sendLoadingState: 加载模型时往流里插一段「━━━━━ llama-swap loading model: xxx」横幅。
+# 必须关掉：llama-swap 把横幅塞进 delta.reasoning_content，而本部署的桥会把它映射成
+# Ollama 的 message.thinking —— 用户会在「思考」里看到这行噪音；且横幅是按 token 拆成
+# 几十个小分块发的，前端拦不干净。
+# 关掉后行为与 Ollama 一致：换载时请求挂起静默等待（约 10s），随后正常出字。
+sendLoadingState: false
+
+includeAliasesInList: true   # 别名也出现在 /v1/models 里
+
+# globalTTL: 闲置多少秒后自动卸载；0 = 永不自动卸载。
+# ⚠「多久没用自动卸载」**不在这里配** —— 统一在 config/residency.json：
+#     {"auto_unload": true, "idle_ttl": 1800,
+#      "per_model_ttl": {"humanizer-12b": 600}, "protected": ["qwen35-4b-heretic"]}
+#   由桥里的 reaper 线程按「最后使用时间」执行（scripts/residency.py）。
+#   好处是改完热生效、能查「还有多久会被卸」，且不依赖 llama-swap 版本。
+#   这里保持 0，免得两套机制互相打架（llama-swap 可能卸掉我们想保护的模型）。
+globalTTL: 0
+
+# ---------------------------------------------------------------------------
+# 通用参数说明（下文每个模型都会复用这一组）
+# ---------------------------------------------------------------------------
+#   --host 127.0.0.1   只监听本机，外部访问统一走 11434 的桥
+#   --port ${PORT}     llama-swap 分配的空闲端口，必须保留，否则代理不到
+#   --jinja            使用模型自带的 Jinja 聊天模板（本版本默认已开，显式写出）
+#   -ngl 99            全部层卸载到 GPU（4060 Laptop 8G）
+#   -fa on             开启 Flash Attention —— 量化 KV 缓存的前提
+#   -ctk/-ctv q8_0     KV 缓存量化到 8bit，显存占用减半，8G 卡的关键手段
+#   -np 1              单并发槽位，避免 KV 缓存按并发数翻倍
+#   -b 2048 -ub 512    逻辑/物理批大小，提示词预填充速度与显存的折中
+#   --metrics          暴露 /metrics，方便观察吞吐
+#   --reasoning-format deepseek
+#                      思考模型把思维链放进 reasoning_content，正文干净；
+#                      桥接层再把它映射成 Ollama 的 message.thinking
+# ============================================================================
+
+models:
+
+  # --------------------------------------------------------------- Qwen3.5 系
+  "qwen35-9b-heretic":
+    name: "Qwen3.5 9B Heretic v2"
+    description: "heretic 去审查 9B · 主力通用（对话/翻译/总结），Q4_K_M 全量入显存"
+    cmd: |
+      {{ROOT}}/bin/llama-server.exe
+      --host 127.0.0.1 --port ${PORT}
+      -m {{ROOT}}/models/Qwen3.5-9B-heretic-v2-Q4_K_M.gguf
+      -ngl 99 -c 16384 -fa on -ctk q8_0 -ctv q8_0
+      -np 1 -b 2048 -ub 512
+      --jinja --reasoning-format deepseek --metrics
+    aliases:
+      - "qwen3.5-9b-heretic:latest"
+    capabilities:
+      tools: true
+      context: 16384
+
+  "qwen35-9b-abliterated-vision":
+    name: "Huihui Qwen3.5 9B Abliterated"
+    description: "huihui 去审查 9B · 带 mmproj 支持图像输入，Q4_K_M + Q8 视觉投影"
+    cmd: |
+      {{ROOT}}/bin/llama-server.exe
+      --host 127.0.0.1 --port ${PORT}
+      -m {{ROOT}}/models/Huihui-Qwen3.5-9B-abliterated.Q4_K_M.gguf
+      --mmproj {{ROOT}}/models/Huihui-Qwen3.5-9B-abliterated.mmproj-Q8_0.gguf
+      -ngl 99 -c 16384 -fa on -ctk q8_0 -ctv q8_0
+      -np 1 -b 2048 -ub 512
+      --jinja --reasoning-format deepseek --metrics
+    aliases:
+      - "huihui-qwen3.5-9b:latest"
+    capabilities:
+      in: [text, image]
+      tools: true
+      context: 16384
+
+  # 9B 角色扮演（NSFW RP）微调：DGDGDG12 版（合并了 mirazrafi 的 RP LoRA）
+  # 量化选 IQ4_XS：16K 上下文下 KV(q8_0) 要 2.0GB，权重只能给到 ~5.3GB，
+  # IQ4_XS 4.87GB 比 Q4_K_M 还小 0.37GB，而质量档位≈Q5_K_S（i-quant 的强项）。
+  # 模板按作者说明用 ChatML：训练用的就是它，专门为了避免 thinking 泄漏、保持沉浸感，
+  # 所以这里**不**沿用其它 9B 的 --reasoning-format deepseek。
+  "qwen35-9b-rp":
+    name: "Qwen3.5 9B NSFW RP RolePlay"
+    description: "9B 角色扮演专用微调 · IQ4_XS · ChatML 模板（无 thinking 泄漏）"
+    cmd: |
+      {{ROOT}}/bin/llama-server.exe
+      --host 127.0.0.1 --port ${PORT}
+      -m {{ROOT}}/models/Qwen3.5-text-9B-NSFW-RP-RolePlay.IQ4_XS.gguf
+      -ngl 99 -c 16384 -fa on -ctk q8_0 -ctv q8_0
+      -np 1 -b 2048 -ub 512
+      --jinja --chat-template chatml --reasoning-format none
+    aliases:
+      - "qwen3.5-9b-nsfw-rp:latest"
+    capabilities:
+      tools: true
+      context: 16384
+
+  # --------------------------------------------------- Qwen3.5 2B（已停用）
+  # 这个模型用不了，原因不在配置，而在 GGUF 文件本身与当前 llama.cpp 不兼容：
+  #   1) qwen35.rope.dimension_sections 写成 3 个 [11,11,10]，同架构的 4B 是 4 个 [11,11,10,0]
+  #   2) 张量叫 blk.N.ssm_dt，当前 llama.cpp 要 blk.N.ssm_dt.bias
+  #   3) qwen35.attention.head_count_kv 是逐层数组 [0,0,0,2,...]（0 = 线性注意力层），
+  #      当前 llama.cpp 只认标量；强行改成标量后张量只匹配到 320/728，说明逐层信息是必需的。
+  # 前两条已能自动修（scripts/gguf_fix.py），第三条必须等 llama.cpp 支持 per-layer KV 头。
+  # 也就是说：这个 GGUF 是用「更新版转换器」导出的，得等运行库追上来。
+  # 恢复办法：换新版 llama.cpp 后取消下面的注释即可。
+  #
+  # "qwen35-2b":
+  #   name: "Qwen3.5 2B"
+  #   description: "轻量 2B · 权重小，可以吃长上下文"
+  #   cmd: |
+  #     {{ROOT}}/bin/llama-server.exe
+  #     --host 127.0.0.1 --port ${PORT}
+  #     -m {{ROOT}}/models/qwen3.5_2b.gguf
+  #     -ngl 99 -c 32768 -fa on -ctk q8_0 -ctv q8_0
+  #     -np 1 -b 2048 -ub 512
+  #     --jinja --reasoning-format deepseek --metrics
+  #   aliases:
+  #     - "qwen3.5:2b"
+  #   capabilities:
+  #     tools: true
+  #     context: 32768
+
+  "qwen35-4b-heretic":
+    name: "Qwen3.5 4B Heretic"
+    description: "4B 去审查版 · 带 mmproj，支持图像输入"
+    cmd: |
+      {{ROOT}}/bin/llama-server.exe
+      --host 127.0.0.1 --port ${PORT}
+      -m {{ROOT}}/models/qwen-3.5-4b-heretic_latest.gguf
+      -mm {{ROOT}}/models/qwen-3.5-4b-heretic_latest-mmproj.gguf
+      -ngl 99 -c 32768 -fa on -ctk q8_0 -ctv q8_0
+      -np 1 -b 2048 -ub 512
+      --jinja --reasoning-format deepseek --metrics
+    aliases:
+      - "qwen-3.5-4b-heretic:latest"
+    capabilities:
+      in: [text, image]
+      context: 32768
+
+  # ------------------------------------------------------------------- 翻译系
+  # ⚠ 这个权重是**全 MHA 无 GQA** 的架构（arch=qwen2, kv_heads=32, head_dim=128），
+  #   每 token 的 KV 是同尺寸 GQA 模型的 4 倍（q8_0 下 0.25 MB/token）。
+  #   权重 5.91 GiB + 8K 上下文 KV 2.00 GiB = 7.91 GiB —— 8G 卡装不下
+  #   （还要留 ~0.9 GiB 给 CUDA 上下文与计算缓冲）。
+  #   所以上下文压到 4K：KV 1.00 GiB，合计 6.91 GiB。
+  #   ⚠ 改档前先跑：python scripts\vram_budget.py models\<文件> --ctx <n>
+  "galtransl-7b":
+    name: "GalTransl 7B v2.6.10"
+    description: "轻小说 / 视觉小说翻译专用（日→中）。权重 5.9GB，显存最紧张的一个"
+    cmd: |
+      {{ROOT}}/bin/llama-server.exe
+      --host 127.0.0.1 --port ${PORT}
+      -m {{ROOT}}/models/GalTransl-7B-v2.6_Q6_k.gguf
+      -ngl 99 -c 4096 -fa on -ctk q8_0 -ctv q8_0
+      -np 1 -b 1024 -ub 256
+      --jinja --metrics
+    aliases:
+      - "GalTransl-7B-v2.6:Q6_k"
+    capabilities:
+      context: 4096
+
+  "hunyuan-mt-7b":
+    name: "Huihui Hunyuan MT Chimera 7B"
+    description: "混元翻译模型（多语种互译）"
+    cmd: |
+      {{ROOT}}/bin/llama-server.exe
+      --host 127.0.0.1 --port ${PORT}
+      -m {{ROOT}}/models/Huihui-Hunyuan-MT-Chimera-7B-abliterated-GGUF_Q4_K_M.gguf
+      -ngl 99 -c 16384 -fa on -ctk q8_0 -ctv q8_0
+      -np 1 -b 2048 -ub 512
+      --jinja --metrics
+    aliases:
+      - "Huihui-Hunyuan-MT-Chimera-7B-abliterated-GGUF:Q4_K_M"
+    capabilities:
+      context: 16384
+
+  # ------------------------------------------------- 文本润色（去 AI 味）
+  # humanizer-12B：把 AI 写的稿子改写成「像人写的」，且保住每个数字/日期/名字。
+  #
+  # ⚠️ 这是**纯 completion 模型**（gemma-4-12B 微调），不是聊天模型：
+  #    只有 /completion 端点 + 字节级精确 prompt 才有正确输出，走 chat 会被
+  #    套上通用模板，直接变成「Sure, here is...」。
+  #    调用逻辑见 humanizer/humanizer_core.py，页面挂在桥上：
+  #        http://127.0.0.1:11434/humanize
+  #
+  # 量化选 Q3-QAT：8G 显存下这是唯一能全量入显存的档位 ——
+  #    权重 5322 MiB + KV 323 MiB + compute 132 MiB ≈ 5.8GB，31 tok/s。
+  #    KV 特别省是因为 gemma4 是混合注意力：48 层里 8 层全局 + 40 层 SWA(窗口 1024
+  #    且 KV 维度减半)，8K 上下文 KV 只要 0.32GB。别按 12B dense 的经验估它。
+  # Q8_0(12.7G)/Q6_K(10G)/Q4_K_M(7.6G) 都装不下（本机 D 盘也只剩 38GB）。
+  "humanizer-12b":
+    name: "Humanizer 12B（去 AI 味）"
+    description: "把 AI 稿子改写成「人写的」· 事实/数字保真 · 纯 completion 模型"
+    # 空闲 TTL：多久没有任何请求就把这个模型从显存卸掉（秒）。
+    # 本功能是**低频工具**（写完稿子才用一次），却要占 5.8GB 显存，
+    # 8G 卡上会把聊天模型挤掉 —— 所以让它闲下来自己让位。
+    # 重载一次约 10 秒；嫌久就调大，嫌占显存就调小。
+    ttl: 600
+    cmd: |
+      {{ROOT}}/bin/llama-server.exe
+      --host 127.0.0.1 --port ${PORT}
+      -m {{ROOT}}/models/humanizer-12b-Q3-QAT.gguf
+      -ngl 99 -c 8192 -fa on -ctk q8_0 -ctv q8_0
+      -np 1 -b 2048 -ub 512
+      --metrics
+    capabilities:
+      context: 8192
+
+  # ----------------------------------------------------------------- Embedding
+  "nomic-embed":
+    name: "nomic-embed-text-v1.5"
+    description: "文本向量化，Ollama 的 nomic-embed-text 对应物"
+    cmd: |
+      {{ROOT}}/bin/llama-server.exe
+      --host 127.0.0.1 --port ${PORT}
+      -m {{ROOT}}/models/nomic-embed-text_latest.gguf
+      -ngl 99 -c 2048 -fa on
+      -np 1 -b 2048 -ub 2048
+      --embedding --pooling mean --jinja --metrics
+    aliases:
+      - "nomic-embed-text:latest"
+    capabilities:
+      context: 2048
+      reranker: false

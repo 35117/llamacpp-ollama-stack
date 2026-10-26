@@ -1,0 +1,91 @@
+# ============================================================================
+#  绝不入库的三类东西：二进制/权重、运行时产物、私人内容
+# ============================================================================
+
+# ---------- 1. 二进制与权重 ----------
+# bin/ 是 llama.cpp 的 CUDA 构建产物：cublasLt64_13.dll 492MB、ggml-cuda.dll 144MB，
+# 还带 LLVM-OpenMP 的许可义务。请自行从 llama.cpp release 下载解压到 bin/。
+/bin/
+
+# models/ 是 40GB 的 GGUF 权重 + 由脚本生成的 model_map.json
+/models/
+*.gguf
+*.gguf.part
+
+# 通用二进制（避免误提交）
+*.dll
+*.exe
+*.so
+*.dylib
+
+# ---------- 2. 运行时产物 ----------
+/logs/
+*.log
+*.pid
+__pycache__/
+*.py[cod]
+
+# ---------- 3. 私人内容 ----------
+# 会话历史（含对话原文与图片）
+/config/chats/
+
+# 人格系统：生成物 + 界面覆盖 + 原始 Modelfile
+# ⚠ 这些是**你自己的角色设定**，默认不入库。仓库只带一个中立示例
+#   （config/personas.example.json + config/personas.example/）。
+/config/personas/
+/config/personas-local/
+/config/personas.json
+/config/modelfiles/
+
+# 真实的 llama-swap 配置（含本机绝对路径），由 scripts/init_config.py 从模板生成
+/config/llama-swap.yaml
+/config/*.bak-*
+# 上游 llama-swap 自带的示例文件，没必要 vendor
+/config/llama-swap.example.yaml
+
+# ---------- 4. 与本项目无关的工作区资料 ----------
+/ScienceDirect/
+/文档/
+/Others/
+/_download/
+/output/
+/.workbuddy/
+
+# ---------- 5. 与本项目定位无关的历史 / 一次性脚本 ----------
+# 论文英→中翻译流水线：完全不同的用例，不属于「Ollama 替代方案」
+/scripts/paper_*.py
+/scripts/paper_glossary*.json
+/scripts/translate-papers.bat
+
+# 从 Ollama 迁移过来的历史脚本（新用户用不到；ollama_lib 已无人引用）
+/scripts/detach_from_ollama.py
+/scripts/ollama_lib.py
+/scripts/sync-ollama-models.bat
+
+# 一次性诊断 / 抓取 / 私人角色提示词
+/scripts/inspect_recycle.py
+/scripts/probe_tray_notify.py
+/scripts/hf_resume_dl.sh
+/scripts/hf_scan_small.py
+/scripts/rp_*.py
+
+# 备份文件（手工改代码留下的 .bak / .bak-时间戳）
+*.bak
+*.bak-*
+*.orig
+
+# 下划线开头 = 写代码时的临时实验脚本，不是模块
+scripts/_*.py
+turtle/_*.py
+
+# 子应用的评测输出（生成物）
+/turtle/results/
+
+# ---------- 6. 编辑器 / 系统 ----------
+/.zcodeignore
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
