@@ -180,6 +180,53 @@ def bootstrap_personas(bases=None):
     return "已从示例初始化 config/personas.json" + note
 
 
+def sync_bases(bases):
+    """把 yaml 里**新加**的模型补进已有的 config/personas.json。
+
+    为什么需要：桥的 Registry 只认 personas.json 的 bases。README 说「yaml 加一条
+    就能用」，但 bases 只在首次初始化时生成 —— 后来加的模型桥不认识，调用报
+    「模型不存在」。所以加完 yaml 要跑一次 --sync-bases。
+
+    只增不改不删：已有的 base（可能被你手工调过 ctx / 别名 / 不支持原因）绝不覆盖。
+    """
+    path = os.path.join(ROOT, "config", "personas.json")
+    if not os.path.exists(path):
+        return "config/personas.json 不存在（先跑一次不带参数的初始化）"
+
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    have = data.get("bases") or {}
+    real = {k: v for k, v in (bases or {}).items() if v.get("gguf")}
+
+    added = sorted(k for k in real if k not in have)
+    if not added:
+        return "bases 已是最新，无需补充"
+
+    for k in added:
+        have[k] = real[k]
+    data["bases"] = have
+
+    aliases = data.get("ollama_aliases") or {}
+    new_alias = 0
+    for k in added:
+        for al in real[k].get("ollama_alias") or []:
+            if al and al != k and al not in aliases:
+                aliases[al] = k
+                new_alias += 1
+    data["ollama_aliases"] = aliases
+
+    bak = f"{path}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
+    shutil.copy2(path, bak)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    msg = f"已补 {len(added)} 个 base（{', '.join(added)}）"
+    if new_alias:
+        msg += f"、别名 {new_alias} 个"
+    return msg + "；备份 " + os.path.basename(bak)
+
+
 def bootstrap_residency():
     """首次运行时用示例策略初始化 config/residency.json。
 
@@ -205,6 +252,9 @@ def main():
 
     ap = argparse.ArgumentParser(description="从模板生成 llama-swap 配置")
     ap.add_argument("--check", action="store_true", help="只检查，不写文件")
+    ap.add_argument("--sync-bases", action="store_true",
+                    help="把 yaml 里新加的模型补进已有的 config/personas.json"
+                         "（只增不改不删）")
     args = ap.parse_args()
 
     if not os.path.exists(TEMPLATE):
@@ -265,6 +315,21 @@ def main():
                                      else "缺失（正式运行会从示例初始化）"))
         print("  驻留策略     " + ("已存在" if has_policy
                                  else "缺失（正式运行会从示例初始化）"))
+        if has_personas:
+            # yaml 里有、但 personas.json 的 bases 里没有 -> 桥调不到（需要 --sync-bases）
+            with open(os.path.join(ROOT, "config", "personas.json"),
+                      "r", encoding="utf-8") as fh:
+                have = (json.load(fh).get("bases") or {})
+            miss = sorted(k for k, v in derive_bases(out).items()
+                          if v.get("gguf") and k not in have)
+            if miss:
+                print("  底座对齐     yaml 里有 %d 个模型未登记到桥（辅助模型如纯 completion"
+                      " / 仅供内部调用者可忽略）：" % len(miss))
+                for k in miss:
+                    print(f"      - {k}")
+                print("               想让客户端能调用就跑 --sync-bases 补上")
+            else:
+                print("  底座对齐     桥已认识 yaml 里全部模型")
         print("\n  --check 模式，未写文件")
         return 0
 
@@ -277,6 +342,23 @@ def main():
         fh.write(out)
     print(f"  已写入 {os.path.relpath(TARGET, ROOT)}")
     print(f"  人格配置     {bootstrap_personas(derive_bases(out))}")
+    if args.sync_bases:
+        print(f"  补充底座     {sync_bases(derive_bases(out))}")
+    else:
+        # 不自动补：personas.json 是用户的文件，静默改写容易让人莫名其妙。
+        # 但必须提示，否则「yaml 加了模型却调不到」会很难查。
+        try:
+            with open(os.path.join(ROOT, "config", "personas.json"),
+                      "r", encoding="utf-8") as fh:
+                have = (json.load(fh).get("bases") or {})
+            miss = sorted(k for k, v in derive_bases(out).items()
+                          if v.get("gguf") and k not in have)
+        except Exception:      # noqa: BLE001
+            miss = []
+        if miss:
+            print("  底座对齐     yaml 里有 %d 个模型未登记到桥（辅助模型可忽略；"
+                  "想让客户端能调用就跑 --sync-bases）：%s"
+                  % (len(miss), ", ".join(miss)))
     print(f"  驻留策略     {bootstrap_residency()}")
 
     # 有 llama-swap.exe 就顺手校验一遍，省得带着坏配置去启动

@@ -187,6 +187,10 @@ python scripts\init_config.py
 
 它会把模板里的占位路径替换成本机实际路径，并列出 `models/` 里发现但未在配置中声明的 `.gguf`。
 
+同时会做两件首次初始化的事（都已存在则跳过）：从示例生成 `config/personas.json`
+（**`bases` 按 yaml 里的模型清单自动生成**，所以 yaml 声明了什么，桥就认识什么），
+以及生成 `config/residency.json`。
+
 ### 4. 起服务
 
 ```bat
@@ -198,8 +202,14 @@ python scripts\service_ctl.py start     :: 或者纯命令行
 
 ### 5. 加模型 / 加人格
 
-- **加模型**：`.gguf` 放 `models/` → `config/llama-swap.yaml` 加一条 → 重启
+- **加模型**：`.gguf` 放 `models/` → `config/llama-swap.yaml` 加一条 → `python scripts\init_config.py --sync-bases` → 重启
 - **加人格**：Modelfile 放 `config/modelfiles/` → `scripts\apply-personas.bat`；
+
+> `--sync-bases` 为什么必须跑：桥对外暴露哪些模型名，取决于 `config/personas.json` 的
+> `bases`（llama-swap 那边只认 yaml）。只改 yaml 的话，客户端调用会报「模型不存在」。
+> 这条命令**只增不改不删** —— 你手工调过的 `ctx`、别名、`supported` 都不会被覆盖，
+> 且会先备份。纯内部用的辅助模型（例如只走 `/completion` 的去 AI 味改写器）可以不登记，
+> 桥就不会把它当成对外模型暴露。
 
 ---
 
@@ -213,6 +223,10 @@ python scripts\service_ctl.py residency --set idle_ttl=900
 python scripts\service_ctl.py autostart on|off|status
 
 python scripts\residency.py get|set K=V|status|list|unload|reap
+
+python scripts\init_config.py              :: 生成 llama-swap 配置（首次初始化）
+python scripts\init_config.py --check      :: 只体检：悬空引用、底座是否对齐
+python scripts\init_config.py --sync-bases :: 把 yaml 新加的模型补进桥（只增不改）
 
 python scripts\vram_budget.py models\xxx.gguf --ctx 8192
 python scripts\smoke_model.py [模型名]
