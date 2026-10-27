@@ -142,6 +142,19 @@ class Registry:
         mm = self.model_map
         bases = personas_json["bases"]
 
+        # supported 是生成 personas.json 那一刻按「文件在不在」拍下的快照。模型后来补上了
+        # （典型场景：先跑 init_config 初始化，再下载权重）快照就过期了，桥会一直报
+        # 「权重文件不在 models/ 里」—— 与磁盘实际状态矛盾，很难查。
+        # 这里按文件实际存在重判，但只做**恢复**不做撤销：真正不兼容的模型
+        # （缺 per-layer 参数、文件被挪进 models/_unusable/）依然保持不支持。
+        models_dir = os.path.join(ROOT, "models")
+        for _bid, _b in bases.items():
+            _gguf = _b.get("gguf")
+            if _b.get("supported") is False and _gguf:
+                if os.path.exists(os.path.join(models_dir, _gguf)):
+                    _b["supported"] = True
+                    _b["unsupported_reason"] = None
+
         def add(mid, base_id, system, params, label, kind, source=None):
             b = bases[base_id]
             merged = dict(b.get("params") or {})
