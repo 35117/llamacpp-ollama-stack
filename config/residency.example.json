@@ -1,5 +1,5 @@
 {
-  "_说明": "模型驻留策略。scripts/init_config.py 用本文件初始化 config/residency.json；之后请改 residency.json（或跑 residency.py set），本文件不再被读取。",
+  "_说明": "模型驻留策略。改完热生效，不用重启服务。想恢复默认就删掉本文件（会退回内置值）或重新跑 init_config（仅在文件不存在时才会重建）。",
   "_字段": {
     "auto_unload": "总开关。false = 只保留手动卸载",
     "idle_ttl": "全局闲置上限（秒）。0 = 永不自动卸载",

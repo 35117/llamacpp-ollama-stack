@@ -15,6 +15,7 @@
     python scripts\\init_config.py --check   # 只检查，不写文件
 """
 import argparse
+import json
 import os
 import re
 import shutil
@@ -41,11 +42,93 @@ def referenced(text):
     return names
 
 
-def bootstrap_personas():
+#: yaml 里一个 model 块的定位锚（本项目模板的固定结构）
+_RE_MODEL_KEY = re.compile(r'^  "([A-Za-z0-9._-]+)":\s*$')
+_RE_NAME = re.compile(r'^    name:\s*"?([^"\n]*)"?\s*$')
+_RE_DESC = re.compile(r'^    description:\s*"([^"\n]*)"')
+_RE_GGUF = re.compile(r'-m\s+\S*?([^/\\\s]+\.gguf)')
+_RE_CTX = re.compile(r'(?:^|\s)-c\s+(\d+)')
+#: yaml 里 aliases 两种写法都要认：块式（- "名字"）与行内式（["a", "b"]）
+_RE_ALIAS_HEAD = re.compile(r'^    aliases:\s*$')
+_RE_ALIAS_ITEM = re.compile(r'^      -\s*"?([^"\n]+?)"?\s*$')
+_RE_ALIAS_INLINE = re.compile(r'^    aliases:\s*\[(.*)\]\s*$')
+
+
+def derive_bases(yaml_text):
+    """从渲染后的 llama-swap.yaml 反推 bases（底座表）。
+
+    为什么需要这一步：桥的 Registry 只认 personas.json 里的 bases，
+    而 llama-swap 认的是 yaml。两边不对齐的话，yaml 里声明了模型、桥里却
+    「模型不存在」。初始化时按 yaml 生成 bases，克隆下来就能直接调用。
+    """
+    bases = {}
+    cur = None
+    in_alias = False
+    for line in yaml_text.splitlines():
+        m = _RE_MODEL_KEY.match(line)
+        if m:
+            cur = {"gguf": None, "file_name": m.group(1), "desc": "",
+                   "ctx": None, "ollama_alias": [], "params": {}}
+            bases[m.group(1)] = cur
+            in_alias = False
+            continue
+        if cur is None:
+            continue
+
+        # aliases 段落要整段吃掉，否则 `- "名字"` 里的引号名字会被当成普通行漏掉
+        if _RE_ALIAS_HEAD.match(line):
+            in_alias = True
+            continue
+        if in_alias:
+            m = _RE_ALIAS_ITEM.match(line)
+            if m:
+                cur["ollama_alias"].append(m.group(1).strip())
+                continue
+            in_alias = False
+        m = _RE_ALIAS_INLINE.match(line)
+        if m:
+            for part in m.group(1).split(","):
+                name = part.strip().strip('"').strip("'")
+                if name:
+                    cur["ollama_alias"].append(name)
+            continue
+
+        m = _RE_NAME.match(line)
+        if m and m.group(1).strip():
+            cur["file_name"] = m.group(1).strip()
+            continue
+        m = _RE_DESC.match(line)
+        if m and not cur["desc"]:
+            cur["desc"] = m.group(1).strip()
+            continue
+        m = _RE_GGUF.search(line)
+        if m and not cur["gguf"]:
+            cur["gguf"] = m.group(1)
+            continue
+        m = _RE_CTX.search(line)
+        if m and cur["ctx"] is None:
+            cur["ctx"] = int(m.group(1))
+            continue
+
+    models_dir = os.path.join(ROOT, "models")
+    for bid, b in bases.items():
+        if not b["gguf"]:
+            continue          # 没写 -m 的条目不是真模型（保留但不标 supported）
+        ok = os.path.exists(os.path.join(models_dir, b["gguf"]))
+        b["supported"] = ok
+        b["unsupported_reason"] = (None if ok else
+                                   f"权重文件不在 models/ 里：{b['gguf']}（已删除或尚未下载）")
+    return bases
+
+
+def bootstrap_personas(bases=None):
     """首次运行时用示例人格初始化 config/personas.json。
 
     不这么做的话桥会因「缺少 config/personas.json」直接退出 —— 克隆下来跑不起来。
     已有文件绝不覆盖（那是用户自己的人设）。
+
+    bases 由 derive_bases() 从 yaml 反推：yaml 声明了哪些模型，桥就认识哪些。
+    否则新克隆只有示例里的一个样例底座，真模型全都调不到。
     """
     dst_json = os.path.join(ROOT, "config", "personas.json")
     src_json = os.path.join(ROOT, "config", "personas.example.json")
@@ -57,14 +140,44 @@ def bootstrap_personas():
     if not os.path.exists(src_json):
         return "缺少示例文件，跳过"
 
+    with open(src_json, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    note = ""
+    real = {k: v for k, v in (bases or {}).items() if v.get("gguf")}
+    if real:
+        data["bases"] = real
+        data["generated_by"] = ("scripts/init_config.py（bases 按 llama-swap.yaml 的 "
+                               "模型清单生成；人格部分来自示例）")
+        # 示例人格原本挂在 example-model 上；那个底座已经不存在了，
+        # 不重新挂载的话 Registry._build 会 KeyError（/admin/state 直接 500）。
+        first = next(iter(real))
+        for p in data.get("personas") or []:
+            if p.get("base") not in real:
+                p["base"] = first
+        # 别名也要登记：客户端用 Ollama 旧名（如 GalTransl-7B-v2.6:Q6_k）调用时，
+        # 桥必须先认识这个名字才转得出去，否则一律 404。
+        aliases = {}
+        for bid, b in real.items():
+            for al in b.get("ollama_alias") or []:
+                if al and al != bid:
+                    aliases[al] = bid
+        data["ollama_aliases"] = aliases
+        note = f"，bases 已按 yaml 生成 {len(real)} 个"
+        if aliases:
+            note += f"、别名 {len(aliases)} 个"
+
     os.makedirs(dst_dir, exist_ok=True)
     if os.path.isdir(src_dir):
         for name in os.listdir(src_dir):
             s, d = os.path.join(src_dir, name), os.path.join(dst_dir, name)
             if os.path.isfile(s) and not os.path.exists(d):
                 shutil.copy2(s, d)
-    shutil.copy2(src_json, dst_json)
-    return "已从示例初始化 config/personas.json（记得改 bases 里的 gguf 文件名）"
+    tmp = dst_json + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, dst_json)
+    return "已从示例初始化 config/personas.json" + note
 
 
 def bootstrap_residency():
@@ -163,7 +276,7 @@ def main():
     with open(TARGET, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(out)
     print(f"  已写入 {os.path.relpath(TARGET, ROOT)}")
-    print(f"  人格配置     {bootstrap_personas()}")
+    print(f"  人格配置     {bootstrap_personas(derive_bases(out))}")
     print(f"  驻留策略     {bootstrap_residency()}")
 
     # 有 llama-swap.exe 就顺手校验一遍，省得带着坏配置去启动
