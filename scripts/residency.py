@@ -70,19 +70,17 @@ import swap_ctl  # noqa: E402
 POLICY_PATH = (os.environ.get("LLAMA_RESIDENCY_POLICY")
                or os.path.join(ROOT, "config", "residency.json"))
 
-#: 默认策略。idle_ttl 单位是秒。
-#: protected 里的模型**永不自动卸载**（仍可手动卸）—— 一般填最常用的那个。
+#: 内置默认策略（**刻意不含任何具体模型名**）。
+#: 换机器 / 别人克隆下来，模型名对不上就是悬空引用，所以这里只给全局值；
+#: 想让某个模型单独设 TTL 或加进 protected，改 config/residency.json
+#: （由 scripts/init_config.py 从 residency.example.json 生成）。
+#: idle_ttl 单位是秒，0 = 不自动卸载。
 DEFAULT_POLICY = {
     "auto_unload": True,
     "idle_ttl": 1800,
     "check_interval": 60,
-    "per_model_ttl": {
-        "humanizer-12b": 600,      # 低频工具，写完稿子就该让位
-        "galtransl-7b": 600,
-    },
-    "protected": [
-        "qwen35-4b-heretic",       # 日常聊天主力，别被自动卸掉
-    ],
+    "per_model_ttl": {},
+    "protected": [],
 }
 
 #: 策略里允许直接改的标量键

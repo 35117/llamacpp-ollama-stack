@@ -1,0 +1,15 @@
+{
+  "_说明": "模型驻留策略。scripts/init_config.py 用本文件初始化 config/residency.json；之后请改 residency.json（或跑 residency.py set），本文件不再被读取。",
+  "_字段": {
+    "auto_unload": "总开关。false = 只保留手动卸载",
+    "idle_ttl": "全局闲置上限（秒）。0 = 永不自动卸载",
+    "check_interval": "后台扫描间隔（秒）",
+    "per_model_ttl": "个别模型的闲置上限，键是 llama-swap 里的模型名；没列出的走 idle_ttl。例：{\"humanizer-12b\": 600}",
+    "protected": "永不自动卸载的模型名单（仍可手动卸）。一般填日常主力"
+  },
+  "auto_unload": true,
+  "idle_ttl": 1800,
+  "check_interval": 60,
+  "per_model_ttl": {},
+  "protected": []
+}

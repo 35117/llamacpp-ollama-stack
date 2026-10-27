@@ -358,7 +358,12 @@ def start(console_bridge=False):
     server = os.path.join(BIN, "llama-server.exe")
     for f in (swap, server):
         if not os.path.exists(f):
-            return False, [f"缺少 {f}"]
+            return False, [
+                f"缺少 {f}",
+                "bin/ 不入版本库（几百 MB 的 CUDA 运行库，且带第三方许可义务）。",
+                "按 README「快速开始」下载后解压到 bin/ —— "
+                "llama-server.exe 与 llama-swap.exe 都放 bin/ 根目录。",
+            ]
 
     # ---------- llama-swap（内部，11435）
     if port_tool.is_listening(SWAP_PORT):

@@ -43,6 +43,10 @@ __pycache__/
 # 上游 llama-swap 自带的示例文件，没必要 vendor
 /config/llama-swap.example.yaml
 
+# 驻留策略：**运行时会改写**（residency.py set / 后台 reaper），
+# 跟踪它会让每次改策略都脏工作区、pull 必冲突。仓库只带 example。
+/config/residency.json
+
 # ---------- 4. 与本项目无关的工作区资料 ----------
 /ScienceDirect/
 /文档/

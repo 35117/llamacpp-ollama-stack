@@ -67,6 +67,23 @@ def bootstrap_personas():
     return "已从示例初始化 config/personas.json（记得改 bases 里的 gguf 文件名）"
 
 
+def bootstrap_residency():
+    """首次运行时用示例策略初始化 config/residency.json。
+
+    residency.json 是**运行时可改**的（residency.py set 会写它），所以它不入库；
+    仓库只带 example。用户克隆后没有这个文件也能跑（走内置默认值），
+    但初始化出来更直观，且能保留 example 里的注释键。
+    """
+    dst = os.path.join(ROOT, "config", "residency.json")
+    src = os.path.join(ROOT, "config", "residency.example.json")
+    if os.path.exists(dst):
+        return "config/residency.json 已存在，未覆盖"
+    if not os.path.exists(src):
+        return "缺少示例策略，跳过（将使用内置默认值）"
+    shutil.copy2(src, dst)
+    return "已从示例初始化 config/residency.json"
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -111,8 +128,12 @@ def main():
     missing_file = sorted(r for r in refs if r not in ggufs)
     not_used = sorted(g for g in ggufs if g not in refs)
 
+    models_dir = os.path.join(ROOT, "models")
     print(f"  仓库根目录   {root_posix}")
-    print(f"  models/ 里   {len(ggufs)} 个 .gguf")
+    if os.path.isdir(models_dir):
+        print(f"  models/ 里   {len(ggufs)} 个 .gguf")
+    else:
+        print("  models/      **目录不存在**（先把 .gguf 放进去）")
     print(f"  配置里引用   {len(refs)} 个")
 
     if missing_file:
@@ -126,8 +147,11 @@ def main():
 
     if args.check:
         has_personas = os.path.exists(os.path.join(ROOT, "config", "personas.json"))
+        has_policy = os.path.exists(os.path.join(ROOT, "config", "residency.json"))
         print("\n  人格配置     " + ("已存在" if has_personas
                                      else "缺失（正式运行会从示例初始化）"))
+        print("  驻留策略     " + ("已存在" if has_policy
+                                 else "缺失（正式运行会从示例初始化）"))
         print("\n  --check 模式，未写文件")
         return 0
 
@@ -140,6 +164,7 @@ def main():
         fh.write(out)
     print(f"  已写入 {os.path.relpath(TARGET, ROOT)}")
     print(f"  人格配置     {bootstrap_personas()}")
+    print(f"  驻留策略     {bootstrap_residency()}")
 
     # 有 llama-swap.exe 就顺手校验一遍，省得带着坏配置去启动
     exe = os.path.join(ROOT, "bin", "llama-swap.exe")
