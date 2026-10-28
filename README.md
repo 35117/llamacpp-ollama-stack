@@ -3,8 +3,8 @@
 **用 llama.cpp 栈复刻 Ollama 体验 —— 桥 + 人格 + 8GB 显存工程实录。**
 
 保留 Ollama 的客户端生态（Continue / Roo Code / n8n / 任何说 Ollama 协议的客户端一行代码都不用改），
-把引擎换成 llama.cpp + llama-swap：你要的是 `-ngl`、KV 量化、`min_p`、`--chat-template` 这些
-精细控制，以及**在 8GB 显存上真的能同时伺候多个模型**。
+把引擎换成 llama.cpp + llama-swap：换来 `-ngl`、KV 量化、`min_p`、`--chat-template` 这些
+精细控制，以及在 8GB 显存上按需轮换多个模型 —— 一次只驻留一个，闲置到点就让位。
 
 ```
 客户端 (Ollama / OpenAI 协议)
@@ -36,16 +36,24 @@
 
 ### 1. 为什么不用 Ollama？
 
-Ollama 把引擎和协议焊在一起。你能调的东西止步于 Modelfile 的 `PARAMETER`。
-而 8GB 显存上，真正决定「能不能跑」的是这些：
+先说清楚：Ollama 能调的东西比我最初以为的多 —— Modelfile 里可以 `PARAMETER num_ctx` /
+`num_gpu` / `min_p`，服务端能用 `OLLAMA_KV_CACHE_TYPE` 量化 KV、用
+`OLLAMA_MAX_LOADED_MODELS` 限制驻留数、用 `OLLAMA_KEEP_ALIVE` 控制卸载。
+它不是「不可控」，而是**控制粒度停在服务级和建模型时**：
 
-| 你需要调的 | Ollama | 这里 |
+| 维度 | Ollama | 这里 |
 |---|---|---|
-| KV 缓存量化（`-ctk q8_0`，直接减半显存） | 不可控 | ✅ |
-| 每模型独立的 `-c` / `-b` / `-ub` | 全局 | ✅ 每个模型单独写 |
-| `min_p` / `top_n_sigma` 等采样器 | 部分 | ✅ 透传任意字段 |
-| `--chat-template` / `--reasoning-format` | 不可控 | ✅ |
-| 一次只驻留一个模型的**硬约束** | 默认允许多个并存 | ✅ |
+| KV 量化 | 服务级环境变量，全机统一一档 | 每个模型单独写 `-ctk/-ctv`，A 模型 q8_0、B 模型 f16 可以共存 |
+| 上下文 / 层卸载 | Modelfile `PARAMETER`，固化进模型，改要重建 | yaml 里每个模型写 `-c` / `-ngl`，改完重启即生效 |
+| 采样参数 | Modelfile 固化 + 请求 `options` 里的一部分 | `/v1/*` 纯透传，llama.cpp 支持什么就能传什么 |
+| 引擎版本 | 跟着 Ollama 的发布节奏走，内部打包的 llama.cpp 由它决定 | `bin/` 里放哪个构建就是哪个，新模型支持自己决定 |
+| 后端 | 只有它自带的那套引擎 | llama-swap 后面接什么都行（vLLM / sd.cpp / …） |
+| 空闲卸载 | `OLLAMA_KEEP_ALIVE` 全局一档 | 每模型 TTL + `protected` 名单 + 剩余时间可查 |
+
+一句话：我要的是**每模型独立**的显存参数，以及能自己决定引擎版本。
+
+> ⚠️ Ollama 迭代很快，上面是我 2026-10 照文档核对的。如果你发现哪条已经不准，
+> 开 issue，我改。
 
 ### 2. 为什么不用 llama.cpp 原生 router mode？
 
@@ -53,6 +61,7 @@ llama.cpp 现在有 `llama serve` 的 router mode（自动发现 GGUF、按需�
 它很好，但四个地方对不上：
 
 1. **没有空闲 TTL 卸载** —— 只有 `--models-max N` 的容量驱逐，没有「闲着 30 分钟就让位」。
+   （这条是我照 router 的 4 个 flag 推的，没看到时间维度；如果你手上的版本已经加了，那这条作废。）
 2. **只管 llama.cpp 自己的模型** —— 不能接 vLLM / sd.cpp / 任何 OpenAI 兼容后端。
 3. **不做 Ollama 协议翻译** —— 只有 OpenAI 协议。
 4. **8GB 卡上「一次只驻留一个」是硬需求**，不是可选优化。
@@ -66,12 +75,16 @@ llama.cpp 现在有 `llama serve` 的 router mode（自动发现 GGUF、按需�
 - README 自述「自用，不保证对别人可用」
 - **没有「人格」这个概念**（对它的 changelog 全文检索 `persona` / `Modelfile`，0 命中）
 
-而人格系统恰好是本仓库的核心之一。所以定位很清楚：**不要跟它比「有没有 Ollama 桥」，
-要比「桥上面还长着什么」。**
+而人格系统恰好是本仓库的核心之一。所以这个仓库不比「有没有 Ollama 桥」—— 那一层别人
+已经做完了；比的是「桥上还长着什么」。
 
 ---
 
-## 三个人无我有的点
+## 三个核心设计
+
+这三块是这个仓库真正花时间的地方 —— 也是我自己踩过坑、才想清楚该怎么做的地方。
+同类项目各覆盖了多少，我列在文末「与同类项目的关系」，那一节比这一节更能说明
+这个仓库的位置。
 
 ### 一、人格系统：同一份权重，多个人格，切换零重载
 
@@ -127,11 +140,11 @@ llama-swap 默认 `globalTTL: 0` = **永不自动卸载**。一个 5–6GB 模�
 解法是**让托盘做服务的父进程**：`service_ctl.py` 检测到托盘在跑，就通过 `PostMessage(WM_COMMAND)`
 把启停转交给它。于是服务挂在用户自己的进程下，不受任何命令生命周期影响。
 
-托盘还管：三态图标、开机自启（HKCU Run）、右键启停。
+托盘还管：四态图标（绿=正常、黄=半开、灰=已停、蓝=启动中）、开机自启（HKCU Run）、右键启停。
 
 ---
 
-## 工具链（这部分别人真没有）
+## 工具链
 
 | 脚本 | 作用 |
 |---|---|
@@ -139,6 +152,12 @@ llama-swap 默认 `globalTTL: 0` = **永不自动卸载**。一个 5–6GB 模�
 | `smoke_model.py [模型]` | 新模型冒烟：真加载一次 + tok/s + 显存余量 + **思考泄漏检测** |
 | `selftest.py` | 15 项端到端协议测试（Ollama + OpenAI 两套协议都验） |
 | `gguf_probe.py <gguf>` | 纯 Python 读 GGUF 头，零依赖 |
+
+> 这些工具和 llama.cpp 自带的 `--fit` / `llama-fit-params`、以及一些客户端的显存估算
+> 有重叠，用途不完全一样：`vram_budget.py` 是**不加载模型**就先算账（纯读 GGUF 元数据），
+> 用来回答「这个量化档在这张卡上塞不塞得下、ctx 能开多大」，而不是「怎么把某个模型
+> 塞进当前空闲显存」。它处理混合注意力（SWA）时按层分别算 KV —— 这一点是我估出
+> 246GB 那种离谱数字之后才改对的。
 
 `vram_budget.py` 为什么重要 —— 一个真实的翻车案例：
 
@@ -232,6 +251,24 @@ python scripts\vram_budget.py models\xxx.gguf --ctx 8192
 python scripts\smoke_model.py [模型名]
 python scripts\selftest.py                    :: 15 项端到端
 ```
+
+---
+
+## 与同类项目的关系
+
+发布前（2026-10）查过一轮同类项目，只列我认为最相关的几个。**这类信息会过时**，
+如果你知道更贴近的，欢迎开 issue 指出来，我改文档。
+
+| 项目 | 与本仓库重叠的部分 |
+|---|---|
+| [mostlygeek/llama-swap](https://github.com/mostlygeek/llama-swap) | 多模型路由、按 model 字段热换后端、`ttl` 自动卸载、`POST /api/models/unload/{名字}`。本仓库直接用它的二进制，不重复实现 |
+| [anantshri/llama-swap](https://github.com/anantshri/llama-swap) | 已经实现了 Ollama 端点翻译（含流式）。差别是本仓库不 fork 那个 Go 项目，而是把人存放桥这一层，并且带 15 项协议自测 |
+| llama.cpp 原生 router mode | 按需加载、`--models-max` 的 LRU 驱逐、自带 WebUI、`--fit` 自动拟合显存。差别见上文第 2 节四条 |
+| [ggml-org/Llama-Windows](https://github.com/ggml-org/Llama-Windows) | Windows 托盘、开机自启、通知。本仓库的托盘多做的一件事是**作为服务父进程**，绕开「脚本起的进程会被按进程树回收」 |
+| [ollama/ollama](https://github.com/ollama/ollama) | `/api/*` 协议本身。本仓库是**消费**这个协议，不是替代它的引擎 |
+
+说清楚一点：如果哪天上游把「人格 + 空闲 TTL 卸载」也做进 router mode，这个仓库的存在
+意义就会变小。这是个自用的工程记录，不是要跟谁抢地盘。
 
 ---
 
