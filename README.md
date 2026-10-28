@@ -307,4 +307,8 @@ turtle/     示例模块：海龟汤（本地 LLM 判题，挂 /turtle）
 
 ## License
 
-MIT，见 [LICENSE](LICENSE)。llama.cpp / llama-swap 均为 MIT，但本仓库不分发它们的二进制。
+本仓库代码以 MIT 发布，见 [LICENSE](LICENSE)。
+
+第三方组件（llama.cpp / llama-swap / CUDA / LLVM OpenMP）的许可与获取方式见
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) —— 本仓库不分发它们的二进制，
+也不分发任何模型权重。
