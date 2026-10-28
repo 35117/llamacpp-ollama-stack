@@ -73,7 +73,8 @@ BASES = {
         "desc": "Qwen3.5 2B（轻量，可长上下文）",
         "ctx": 32768,
         "ollama_alias": ["qwen3.5:2b"],
-        # 该 GGUF 与当前 llama.cpp b11146 不兼容，详见 unsupported_reason。
+        # 该 GGUF 与本部署当时的 llama.cpp 构建（b11146）不兼容，详见 unsupported_reason。
+        # ⚠ 这里的构建号只是实测记录，不代表「当前」—— 换过 bin/ 后就可能已经支持了。
         # 证据（2026-09-27 实测）：
         #   1. qwen35.rope.dimension_sections 是 3 个 [11,11,10]，同架构 4B 是 4 个 [11,11,10,0]
         #   2. 张量叫 blk.N.ssm_dt，当前 llama.cpp 要 blk.N.ssm_dt.bias
@@ -83,9 +84,10 @@ BASES = {
         # 处理：不注册（对外看不到），换新版 llama.cpp 后可解注释。
         "supported": False,
         "unsupported_reason": (
-            "该 GGUF 由更新版转换器导出（逐层 attention.head_count_kv 数组），"
-            "当前 llama.cpp b11146 只支持标量形式，无法加载。"
-            "需要 llama.cpp 支持 per-layer head_count_kv 后再启用，或重新下载该模型的 GGUF。"
+            "该 GGUF 由更新版转换器导出（逐层 attention.head_count_kv 数组）。"
+            "bin/ 里的 llama.cpp 若只支持标量形式就加载不了"
+            "（本部署实测：b11146 属于此列，2026-09-27）。"
+            "换用支持 per-layer head_count_kv 的构建后可启用，或重新下载该模型的 GGUF。"
         ),
     },
     "qwen35-4b-heretic": {

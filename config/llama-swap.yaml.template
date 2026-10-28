@@ -112,14 +112,15 @@ models:
       context: 16384
 
   # --------------------------------------------------- Qwen3.5 2B（已停用）
-  # 这个模型用不了，原因不在配置，而在 GGUF 文件本身与当前 llama.cpp 不兼容：
+  # 这个模型用不了，原因不在配置，而在 GGUF 文件本身与 llama.cpp 不兼容。
+  # ⚠ 下面三条是 2026-09-27 在本部署的 b11146 上实测的结论，**不代表你手上的版本**：
   #   1) qwen35.rope.dimension_sections 写成 3 个 [11,11,10]，同架构的 4B 是 4 个 [11,11,10,0]
-  #   2) 张量叫 blk.N.ssm_dt，当前 llama.cpp 要 blk.N.ssm_dt.bias
+  #   2) 张量叫 blk.N.ssm_dt，llama.cpp 要 blk.N.ssm_dt.bias
   #   3) qwen35.attention.head_count_kv 是逐层数组 [0,0,0,2,...]（0 = 线性注意力层），
-  #      当前 llama.cpp 只认标量；强行改成标量后张量只匹配到 320/728，说明逐层信息是必需的。
+  #      b11146 只认标量；强行改成标量后张量只匹配到 320/728，说明逐层信息是必需的。
   # 前两条已能自动修（scripts/gguf_fix.py），第三条必须等 llama.cpp 支持 per-layer KV 头。
   # 也就是说：这个 GGUF 是用「更新版转换器」导出的，得等运行库追上来。
-  # 恢复办法：换新版 llama.cpp 后取消下面的注释即可。
+  # 恢复办法：换一个支持 per-layer head_count_kv 的构建后，取消下面的注释并试加载。
   #
   # "qwen35-2b":
   #   name: "Qwen3.5 2B"

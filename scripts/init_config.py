@@ -35,10 +35,17 @@ def find_ggufs():
 
 
 def referenced(text):
-    """配置里引用到的 gguf 文件名（去重）。"""
+    """配置里**生效的** gguf 文件名（去重）。
+
+    注释行必须跳过：模板里留了一段被注释掉的 `qwen35-2b` 示例（记录一个不兼容的
+    模型），若把注释也当声明，每次体检都会报「配置里声明了但文件不存在」这种假警报。
+    """
     names = set()
-    for m in re.finditer(r"([^\s/\\]+\.gguf)", text):
-        names.add(m.group(1))
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        for m in re.finditer(r"([^\s/\\]+\.gguf)", line):
+            names.add(m.group(1))
     return names
 
 
