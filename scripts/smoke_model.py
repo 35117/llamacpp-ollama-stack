@@ -95,13 +95,24 @@ def main():
         ec = r.get("eval_count") or 0
         ed = r.get("eval_duration") or 0
         tps = ec / (ed / 1e9) if ec and ed else 0
+        # prefill（预填充）与 decode 是两个数量级不同的指标，混在一起看会误判：
+        # 长上下文卡的是 prefill 和首字延迟，日常体感卡的是 decode。
+        pc = r.get("prompt_eval_count") or 0
+        pd = r.get("prompt_eval_duration") or 0
+        ptps = pc / (pd / 1e9) if pc and pd else 0
+        # 含加载时间的"冷启动到首字"：dt 减去纯解码耗时
+        ttft = dt - (ed / 1e9) if ed else dt
         _, used1, free1 = vram()
 
-        print(f"     加载+首答 {dt:.1f}s   {ec} tok   {tps:.1f} tok/s   "
+        print(f"     冷启动到首字 {ttft:.1f}s   {ec} tok   {tps:.1f} tok/s   "
               f"显存剩 {free1} MiB（用了 {used1} MiB）")
+        if ptps:
+            print(f"     prefill   ：{pc} tok / {pd / 1e9:.2f}s = {ptps:.0f} tok/s")
         print(f"     content  ：{content[:100]!r}")
         if thinking:
             print(f"     thinking ：{len(thinking)} 字 ← 有思考内容")
+        if r.get("done_reason") == "length":
+            print(f"     ⚠ 被截断：num_predict 用光（{ec} tok），下面的判断不可信")
         leaked = [k for k in LEAK_MARKS if k in content]
         if leaked:
             print(f"     ✗ 正文里出现疑似思考泄漏标记：{leaked}")
@@ -110,6 +121,10 @@ def main():
         else:
             print("     ✓ 正文干净、无 thinking 泄漏")
         print()
+
+    print("  注：llama.cpp 默认开前缀缓存。同一个 prompt 紧接着再跑一次会跳过 prefill，")
+    print("      prefill tok/s 会明显变高 —— 那是缓存命中，不是模型变快。")
+    print("      要横向比 prefill，每次换一个不同的 prompt，或先重启服务。")
     return 0
 
 

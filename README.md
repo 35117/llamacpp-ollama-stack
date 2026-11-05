@@ -149,7 +149,7 @@ llama-swap 默认 `globalTTL: 0` = **永不自动卸载**。一个 5–6GB 模�
 | 脚本 | 作用 |
 |---|---|
 | `vram_budget.py <gguf> --ctx 8192` | **不加载模型**，纯读 GGUF 元数据算 KV 与显存账。支持混合注意力（SWA 分层计算） |
-| `smoke_model.py [模型]` | 新模型冒烟：真加载一次 + tok/s + 显存余量 + **思考泄漏检测** |
+| `smoke_model.py [模型]` | 新模型冒烟：真加载一次 + **prefill 与解码分开报** + 首字延迟 + 显存余量 + **思考泄漏检测**（被截断时会明确说，不给出假结论） |
 | `selftest.py` | 15 项端到端协议测试（Ollama + OpenAI 两套协议都验） |
 | `gguf_probe.py <gguf>` | 纯 Python 读 GGUF 头，零依赖 |
 
@@ -174,6 +174,29 @@ llama-swap 默认 `globalTTL: 0` = **永不自动卸载**。一个 5–6GB 模�
 | `qwen35-9b-heretic` | 5.24 | 16384 | 1.00 | 6.24 | 安全 |
 | `galtransl-7b` | 5.91 | 4096 | 1.00 | 6.91 | 紧 |
 | `humanizer-12b` | 5.20 | 8192 | 0.22 | 5.42 | 安全（SWA 混合注意力，KV 极省） |
+
+### 8GB 卡的 ctx 天花板怎么算
+
+`-c` 不是越大越好，它和 KV 缓存线性相关，而 KV 是 8G 卡上唯一能挤压的东西。
+公式（`-fa on` + `-ctk/-ctv q8_0` 的前提下）：
+
+```
+可用预算   = 8 − 0.9          # 0.9 GiB = CUDA 上下文 + compute buffer + logits，本机实测
+KV/token   = 层数 × kv_heads × head_dim × 2(K和V) × 1 字节(q8_0)
+ctx 上限  ≈ (可用预算 − 权重) / KV每token
+```
+
+qwen35 系（32 层 × 4 kv_heads × 256）在 q8_0 下正好是 **64 KiB/token**：
+
+| 模型 | 权重 GiB | KV 预算 GiB | 理论 ctx 上限 | 当前配置 |
+|---|---|---|---|---|
+| `qwen35-9b` | 5.24 | 1.86 | ≈ 29.7K | 16384（留余量给别人/碎片） |
+| `qwen35-4b` | 2.52 | 4.58 | ≈ 73K | 32768 |
+| `galtransl-7b`（全 MHA） | 5.91 | 1.19 | ≈ 12.7K | 4096（8K 实测 7.91 GiB，装不下） |
+
+⚠ **别照抄大卡配方**。同一个 9B 写 `-c 32768` 要 7.24 GiB，直接超预算；而且 `-ngl 99`
+是显式写的，`--fit` 不会帮你缩层，结果是加载失败而不是自动降级。加新模型前先跑一次
+`vram_budget.py <gguf> --ctx <你想要的>`。
 
 ---
 
@@ -304,6 +327,21 @@ ui/         单文件聊天界面（零依赖）
 humanizer/  示例模块：去 AI 味改写（纯 completion 模型，挂 /humanize）
 turtle/     示例模块：海龟汤（本地 LLM 判题，挂 /turtle）
 ```
+
+## 设计参考
+
+下面几个项目的工程记录影响了本仓库的几处做法。**只借鉴思路，没有复制任何代码**，
+列在这里是方便读者溯源，也避免看起来像是我们自己想出来的。
+
+| 来源 | 借鉴了什么 | 落在哪 |
+|---|---|---|
+| [cyber-on-strata](https://github.com/1314521gjy/cyber-on-strata)（MIT） | ① `max_tokens` 是 thinking 的预算，给小了会出现「content 0 字 + finish=length」，看着像模型不会答<br>② 前缀缓存会让 prefill 测出假高，prefill 与 decode 必须分开看<br>③ 把「必须按显卡改的参数」收敛成一个 | ① UI 现在会明说「思考把 token 用光了」<br>② `smoke_model.py` 分开报 prefill / 解码并加了提示<br>③ 写进了下面「8GB 卡的 ctx 天花板」的算法 |
+| [ninfer-fusion-kvmem](https://github.com/1314521gjy/ninfer-fusion-kvmem)（Apache-2.0） | 把「逻辑上下文」和「设备 KV 池」当成两个独立容量来配置 | 同一视角写「ctx 天花板」：先算 KV 预算，再反推 ctx |
+| [ornith1.5-122B-on-Strata](https://github.com/1314521gjy/ornith1.5-122B-on-Strata) | 验证纪律：「判否必须带条件」「判据要写清怎么变红」 | 尚未落地到 `selftest.py`（15 项目前只报 PASS，阴性控制散在 `test_bridge_errors.py`） |
+
+引用日期 2026-11-05。**这些仓库的数字不要直接套用**：它们的实测硬件是 32GB 显存 / 64–96GB
+内存，配方围绕「专家权重常驻内存」设计；本仓库的 0.9 GiB 余量与 KV/token 都是本机
+（RTX 4060 Laptop 8GB）实测值。
 
 ## License
 

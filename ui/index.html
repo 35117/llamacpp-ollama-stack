@@ -168,6 +168,8 @@
     font-family:inherit;
   }
   .stats{font-size:11px;color:var(--fg-mute);margin-top:6px}
+  /* 截断/预算不足这类"不是错误但会让人误解"的提示：不占错误样式，但要看得见 */
+  .notice{font-size:12px;color:var(--warn);margin-top:6px;line-height:1.55}
   .cursor::after{content:"▋";color:var(--accent);animation:blink 1s steps(2) infinite}
   @keyframes blink{50%{opacity:0}}
   .err{
@@ -674,6 +676,13 @@ function msgNode(m, streaming) {
   content.innerHTML = renderMarkdown(m.content || "");
   body.appendChild(content);
 
+  if (!isUser && m.notice) {
+    const n = document.createElement("div");
+    n.className = "notice";
+    n.textContent = "⚠ " + m.notice;
+    body.appendChild(n);
+  }
+
   if (!isUser && m.stats) {
     const s = document.createElement("div");
     s.className = "stats";
@@ -916,6 +925,15 @@ async function send() {
         if (obj.done) {
           const ec = obj.eval_count || 0, ed = obj.eval_duration || 0;
           if (ec && ed) asst.stats = ec + " tokens · " + (ec / (ed / 1e9)).toFixed(1) + " tok/s";
+          // done_reason 由桥从上游 finish_reason 映射（length = 预算用光）。
+          // 思考模型最容易中招：预算先被 thinking 吃掉，正文一个字都没出来。
+          // 不提示的话，用户看到的就是一个空白气泡 —— 以为模型不会说话。
+          if (obj.done_reason === "length") {
+            asst.notice = (!asst.content.trim() && asst.thinking)
+              ? ("思考过程把 " + ec + " 个 token 全用光了，正文没来得及输出。"
+                 + "把 num_predict 调大，或关掉思考再问。")
+              : "输出被截断：达到 max tokens（num_predict）上限，内容可能不完整。";
+          }
         }
       }
     }
