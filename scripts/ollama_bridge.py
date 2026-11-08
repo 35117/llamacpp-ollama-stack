@@ -681,6 +681,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 if method == "PUT" and arg:
                     rec, err = bridge_admin.save_chat(arg, body)
                     return self._err(err, 400) if err else self._send_json(rec)
+                if method == "PATCH" and arg:
+                    rec, err = bridge_admin.patch_chat(arg, body)
+                    return self._err(err, 404) if err else self._send_json(rec)
                 if method == "DELETE" and arg:
                     r, err = bridge_admin.delete_chat(arg)
                     return self._err(err, 400) if err else self._send_json(r)
@@ -972,6 +975,12 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if self._is_admin_route(split.path):
             return self._handle_admin("PUT", split.path, split.query)
         return self._passthrough("PUT")
+
+    def do_PATCH(self):
+        split = urllib.parse.urlsplit(self.path)
+        if self._is_admin_route(split.path):
+            return self._handle_admin("PATCH", split.path, split.query)
+        return self._passthrough("PATCH")
 
     def send_response(self, code, message=None):
         # 记录「响应头已经开始发」，供 _safe_err 判断还能不能改状态码。

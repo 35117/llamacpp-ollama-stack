@@ -32,6 +32,8 @@ UI_DIR = os.path.join(ROOT, "ui")
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$")
 MAX_SYSTEM = 200_000
 MAX_MSG = 400_000
+MAX_IMGS = 8                 # 单条消息最多存几张图（前端上限是 6）
+MAX_IMG_CHARS = 5_000_000    # 单张图裸 base64 的字符上限（约 3.7MB 原始字节）
 
 
 # --------------------------------------------------------------------------- 工具
@@ -442,6 +444,65 @@ def load_chat(cid):
     return d, None
 
 
+def _clean_msg(m):
+    """会话落盘的单条消息：正文 + 思考 + 图片。
+
+    ⚠ 图片曾经在这里被整条丢掉（只重建 role/content/thinking）—— 前端的渲染器
+    明明支持画图，收到的却是空数组，于是关掉页面再打开，图全没了。
+    """
+    rec = {"role": m.get("role"),
+           "content": m.get("content") or "",
+           "thinking": m.get("thinking") or ""}
+    imgs = []
+    raw = m.get("images")
+    if isinstance(raw, list):
+        for it in raw[:MAX_IMGS]:
+            if not isinstance(it, dict):
+                continue
+            b64 = it.get("b64")
+            if not isinstance(b64, str) or not b64 or len(b64) > MAX_IMG_CHARS:
+                continue
+            mime = it.get("mime")
+            one = {"b64": b64,
+                   "mime": mime if isinstance(mime, str) and mime.startswith("image/")
+                   else "image/jpeg"}
+            name = it.get("name")
+            if isinstance(name, str) and name:
+                one["name"] = name[:120]
+            for k in ("w", "h"):
+                v = it.get(k)
+                if isinstance(v, int) and 0 < v < 100000:
+                    one[k] = v
+            imgs.append(one)
+    if imgs:
+        rec["images"] = imgs
+    return rec
+
+
+def patch_chat(cid, body):
+    """只改标题（和「标题是否自动生成」），不动消息。
+
+    列表里双击改名用它 —— 为了改个标题就让前端把整段会话连同图片再传一遍，
+    既慢又容易在中途丢东西。改名不刷新 updated，免得列表顺序莫名其妙地跳。
+    """
+    if not ID_RE.match(cid):
+        return None, "id 不合法"
+    path = os.path.join(CHATS_DIR, cid + ".json")
+    d = _read_json(path, None)
+    if not isinstance(d, dict):
+        return None, "对话不存在"
+    if "title" in body:
+        t = str(body.get("title") or "").strip()
+        if not t:
+            return None, "标题不能为空"
+        d["title"] = t[:120]
+    if "title_auto" in body:
+        d["title_auto"] = bool(body.get("title_auto"))
+    _write_json(path, d)
+    return {"id": cid, "title": d.get("title"),
+            "title_auto": bool(d.get("title_auto"))}, None
+
+
 def save_chat(cid, body):
     if not ID_RE.match(cid):
         return None, "id 不合法"
@@ -460,9 +521,8 @@ def save_chat(cid, body):
         "model": body.get("model"),
         "created": body.get("created") or time.strftime("%Y-%m-%d %H:%M:%S"),
         "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "messages": [{"role": m.get("role"),
-                      "content": m.get("content") or "",
-                      "thinking": m.get("thinking") or ""} for m in msgs],
+        "title_auto": bool(body.get("title_auto")),
+        "messages": [_clean_msg(m) for m in msgs],
     }
     _write_json(os.path.join(CHATS_DIR, cid + ".json"), rec)
     return rec, None

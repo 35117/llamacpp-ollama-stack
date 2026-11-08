@@ -142,6 +142,19 @@ llama-swap 默认 `globalTTL: 0` = **永不自动卸载**。一个 5–6GB 模�
 
 托盘还管：四态图标（绿=正常、黄=半开、灰=已停、蓝=启动中）、开机自启（HKCU Run）、右键启停。
 
+### 四、单文件聊天界面（零依赖）
+
+`ui/index.html` 一个文件，没有构建步骤，由桥直接挂到 `/ui`。
+
+- 流式输出、Markdown、可折叠思考链、多会话
+- **图片**：粘贴 / 拖入 / 选文件，长边压到 1152px（PNG 优先，超 1.5MB 转 JPEG）；
+  **图片跟着消息一起落盘**，关掉页面再打开还在
+- 只把最近 2 条带图的用户消息重新发给模型 —— 历史图片全量重传会让视觉 token 随轮数线性膨胀
+- **标题**默认按首句生成（去掉「帮我 / 请问」这类没有信息量的开头）；
+  可选开「自动标题」，第一轮结束后让模型用一句话概括（约 24 token，失败就退回默认标题）
+- **流式输出不抢滚动条**：只有原本贴在底部时才跟随，往上翻就停住，并浮出「回到底部」
+- 会话存在 `config/chats/*.json`（纯文件、可备份、可手工看）；列表里双击标题改名
+
 ---
 
 ## 工具链
@@ -313,10 +326,14 @@ python scripts\selftest.py            15 项  协议端到端
 python scripts\test_ui_backend.py     27 项  界面后端（含路径穿越防护）
 python scripts\test_bridge_errors.py  10 项  响应状态机（mock 上游，不需要 GPU）
 python scripts\test_residency.py      11 项  卸载与闲置判定（mock llama-swap）
+python scripts\test_chat_images.py    16 项  图片落盘 + 改名（要服务在跑）
+node    scripts\test_ui_logic.js      12 项  标题与图片窗口逻辑（只需要 node）
 python scripts\test_lifecycle_live.py 真实启停服务（需要模型与显存）
 ```
 
-前四套不需要 GPU 或权重，可以直接在 CI 跑。
+除 `test_lifecycle_live.py`（要真加载模型）之外都不吃显存；`test_chat_images.py` 需要一个
+正在运行的服务（只读 `/admin/chats`，不会触发模型加载）。`test_ui_logic.js` 不测副本 ——
+它把 `ui/index.html` 里的真实函数抽出来跑。
 
 ## 目录
 

@@ -86,7 +86,7 @@
   .side-foot .tip a{color:var(--fg-dim)}
 
   /* ---------------- 主区 ---------------- */
-  main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+  main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
   header{
     padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);
     display:flex;align-items:center;gap:12px;flex-wrap:wrap;
@@ -170,6 +170,16 @@
   .stats{font-size:11px;color:var(--fg-mute);margin-top:6px}
   /* 截断/预算不足这类"不是错误但会让人误解"的提示：不占错误样式，但要看得见 */
   .notice{font-size:12px;color:var(--warn);margin-top:6px;line-height:1.55}
+  /* 流式输出不再强行把视口拽到底：原本在底部才跟随，滚上去了就停住，
+     浮出这个按钮让人自己决定什么时候回去。 */
+  #btn-jump{
+    position:absolute;left:50%;transform:translateX(-50%);bottom:104px;z-index:6;
+    padding:6px 14px;border-radius:16px;border:1px solid var(--line);
+    background:var(--panel);color:var(--fg-dim);font-size:12px;cursor:pointer;
+    box-shadow:0 4px 14px rgba(0,0,0,.14);
+  }
+  #btn-jump:hover{color:var(--accent);border-color:var(--accent)}
+  #btn-jump.hidden{display:none}
   .cursor::after{content:"▋";color:var(--accent);animation:blink 1s steps(2) infinite}
   @keyframes blink{50%{opacity:0}}
   .err{
@@ -325,6 +335,9 @@
     <label class="switch" title="开启后模型会先输出思考过程（更慢，但复杂问题更稳）">
       <input type="checkbox" id="opt-think"> 深度思考
     </label>
+    <label class="switch" title="第一轮结束后让模型用一句话概括成标题（多一次很小的请求）">
+      <input type="checkbox" id="opt-autotitle"> 自动标题
+    </label>
     <div id="meta">
       <span class="pill" id="pill-model">—</span>
       <span class="pill" id="pill-svc">服务检查中…</span>
@@ -339,6 +352,8 @@
       <div style="margin-top:6px">📎 选图片 · <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴 · 也可以把图片拖进来（需选带视觉的模型）</div>
     </div>
   </div>
+
+  <button id="btn-jump" class="hidden" title="回到底部">↓ 回到底部</button>
 
   <div id="composer">
     <div id="attach-strip"></div>
@@ -426,6 +441,9 @@ const state = {
   streaming: false,
   abort: null,
   title: null,
+  titleAuto: true,     // 标题是自动生成的（可被模型总结替换）；手动改名后置 false
+  titleBusy: false,
+  stick: true,         // 视口是否贴底：只有贴底时流式输出才自动跟随
   dirty: false,
 };
 
@@ -549,12 +567,18 @@ function renderMarkdown(text) {
 const IMG_MAX_SIDE = 1152;
 const IMG_MAX_COUNT = 6;
 const IMG_PNG_KEEP_BYTES = 1.5e6;   // PNG 超过这个体积就改存 JPEG
+const VISION_KEEP_TURNS = 2;        // 只回传最近 2 条带图消息，别每轮重发全部历史图片
 
 // 当前选的模型/人格能不能看图（能力由后端 /admin/state 透出）
 function visionOK() {
   const m = state.personas.find(p => p.id === state.modelId) ||
             state.bases.find(b => b.id === state.modelId);
   return !!(m && m.vision);
+}
+
+function imgSrc(it) {
+  // 落盘后只剩裸 base64 + mime，内存里才有 dataUrl。两种都得能画。
+  return it.dataUrl || ("data:" + (it.mime || "image/jpeg") + ";base64," + (it.b64 || ""));
 }
 
 function visionHint() {
@@ -591,6 +615,7 @@ async function prepareImage(file) {
     name: file.name || "粘贴的图片",
     dataUrl: dataUrl,
     b64: dataUrl.slice(dataUrl.indexOf(",") + 1),   // Ollama 协议要裸 base64
+    mime: dataUrl.slice(5, dataUrl.indexOf(";")),   // 落盘只存 mime，不存整个 dataUrl
     w: w, h: h,
   };
 }
@@ -654,10 +679,10 @@ function msgNode(m, streaming) {
     box.className = "imgs";
     for (const it of m.images) {
       const im = document.createElement("img");
-      im.src = it.dataUrl;
+      im.src = imgSrc(it);
       im.alt = it.name || "图片";
       im.title = (it.name || "图片") + " · " + it.w + "×" + it.h + "（点击看大图）";
-      im.onclick = () => showLightbox(it.dataUrl);
+      im.onclick = () => showLightbox(imgSrc(it));
       box.appendChild(im);
     }
     body.appendChild(box);
@@ -692,6 +717,88 @@ function msgNode(m, streaming) {
   return el;
 }
 
+/* ---------------------------------------------------- 视口贴底 / 标题 */
+function setStick(v) {
+  state.stick = !!v;
+  const b = $("btn-jump");
+  if (b) b.classList.toggle("hidden", state.stick);
+}
+
+function makeTitle(text, imgs) {
+  let t = (text || "").replace(/\s+/g, " ").trim();
+  if (!t) {
+    const n = imgs && imgs[0] && imgs[0].name;
+    return n ? "［图片］" + n : "［图片］";
+  }
+  // 「帮我 / 请问 / 能不能」这类开头对标题没有信息量
+  t = t.replace(/^(请问一下|请问|请帮我|请|帮我|帮忙|麻烦你|麻烦|能不能|能否|可以帮我|可以|我想让你|我想|我要|给我)[\s,，、:：]*/i, "");
+  if (!t) t = (text || "").trim();
+  const first = (t.split(/[。！？!?\n]/)[0] || t).trim();
+  const s = first || t;
+  return s.length > 18 ? s.slice(0, 18) + "…" : s;
+}
+
+function autoTitleOn() { return localStorage.getItem("ui.autoTitle") === "1"; }
+
+async function maybeAutoTitle() {
+  if (!autoTitleOn() || !state.titleAuto || state.titleBusy) return;
+  if (!state.modelId || !state.chatId) return;
+  const answers = state.messages.filter(m => m.role === "assistant" && m.content.trim());
+  if (answers.length !== 1) return;      // 只在第一轮结束后总结一次，之后不再打扰模型
+  const u = state.messages.find(m => m.role === "user");
+  if (!u) return;
+  state.titleBusy = true;
+  try {
+    const res = await fetch(API + "/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: state.modelId, stream: false, think: false,
+        options: { num_predict: 24, temperature: 0.3 },
+        messages: [
+          { role: "system", content: "你是标题生成器。用不超过 12 个汉字概括对话主题。" +
+              "只输出标题本身：不要引号、不要书名号、不要标点结尾、不要解释。" },
+          { role: "user", content: "用户：" + (u.content || "（图片）").slice(0, 300) +
+              "\n助手：" + answers[0].content.slice(0, 400) },
+        ],
+      }),
+    });
+    if (!res.ok) return;
+    const d = await res.json();
+    let t = ((d.message && d.message.content) || "").split("\n")[0].trim();
+    t = t.replace(/^["'“”「」《》\s]+/, "").replace(/["'“”「」《》。，,.\s]+$/, "");
+    if (!t || t.length > 24) return;
+    if (!state.titleAuto) return;        // 期间用户手动改过就算了
+    state.title = t;
+    renderChatList();
+    await saveChat();
+  } catch (e) {
+    /* 标题失败不影响对话本身 */
+  } finally {
+    state.titleBusy = false;
+  }
+}
+
+function buildPayloadMessages() {
+  const msgs = state.messages.filter(
+    m => m.role === "user" || (m.role === "assistant" && m.content));
+  // 以前每轮把历史里所有图片重新发一遍，视觉 token 随轮数线性膨胀。
+  // 现在只回传最近几条带图的；更早的图仍留在界面上，只是不再上传。
+  const keep = new Set();
+  let n = 0;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.role === "user" && m.images && m.images.length) {
+      if (n < VISION_KEEP_TURNS) { keep.add(i); n++; }
+    }
+  }
+  return msgs.map((m, i) => {
+    const o = { role: m.role, content: m.content };
+    if (keep.has(i)) o.images = m.images.map(x => x.b64);
+    return o;
+  });
+}
+
 function renderMessages() {
   const box = $("messages");
   box.innerHTML = "";
@@ -708,6 +815,7 @@ function renderMessages() {
   for (const m of state.messages) wrap.appendChild(msgNode(m, false));
   box.appendChild(wrap);
   box.scrollTop = box.scrollHeight;
+  setStick(true);
 }
 
 /* ---------------------------------------------------------------- 选择器 */
@@ -757,10 +865,28 @@ function renderChatList() {
   for (const c of state.chats) {
     const d = document.createElement("div");
     d.className = "chat-item" + (c.id === state.chatId ? " active" : "");
-    d.innerHTML = '<div class="ci-title">' + esc(c.title) + "</div>" +
+    d.innerHTML = '<div class="ci-title" title="双击改名">' + esc(c.title) + "</div>" +
                   '<div class="ci-sub">' + esc(c.model || "") + " · " + c.count + " 条</div>" +
                   '<button class="ci-del" title="删除这个对话">×</button>';
     d.onclick = () => openChat(c.id);
+    // 双击改名：标题是自动生成的，不满意直接改两个字最快
+    d.querySelector(".ci-title").ondblclick = async (ev) => {
+      ev.stopPropagation();
+      const t = prompt("给这个对话改个名字（留空取消）", c.title);
+      if (t == null) return;
+      const nt = t.trim();
+      if (!nt || nt === c.title) return;
+      try {
+        await api("/admin/chats/" + encodeURIComponent(c.id), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: nt, title_auto: false }),
+        });
+        if (state.chatId === c.id) { state.title = nt; state.titleAuto = false; }
+        await loadChats();
+        toast("已改名");
+      } catch (e) { toast("改名失败：" + e.message, true); }
+    };
     d.querySelector(".ci-del").onclick = async (ev) => {
       ev.stopPropagation();
       if (!confirm("删除对话「" + c.title + "」？此操作不可撤销。")) return;
@@ -788,9 +914,12 @@ async function openChat(id) {
     const d = await api("/admin/chats/" + encodeURIComponent(id));
     state.chatId = d.id;
     state.title = d.title;
-    state.messages = (d.messages || []).map(m => ({
-      role: m.role, content: m.content || "", thinking: m.thinking || "",
-    }));
+    state.messages = (d.messages || []).map(m => {
+      const one = { role: m.role, content: m.content || "", thinking: m.thinking || "" };
+      if (m.images && m.images.length) one.images = m.images;   // 带回来，否则重开就丢图
+      return one;
+    });
+    state.titleAuto = d.title_auto !== false;
     if (d.model) {
       state.modelId = d.model;
       $("model-select").value = d.model;
@@ -805,6 +934,7 @@ async function openChat(id) {
 function newChat(navigate) {
   state.chatId = null;
   state.title = null;
+  state.titleAuto = true;   // 上一轮可能因为手动改名被置 false，新会话要复原
   state.messages = [];
   renderMessages();
   renderChatList();
@@ -826,8 +956,18 @@ async function saveChat() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title: state.title || "未命名对话",
+        title_auto: state.titleAuto,
         model: state.modelId,
-        messages: state.messages,
+        // 只发 base64 + mime；把内存里的 dataUrl 也带上会让体积翻倍
+        messages: state.messages.map(m => {
+          const o = { role: m.role, content: m.content, thinking: m.thinking };
+          if (m.images && m.images.length) {
+            o.images = m.images.map(it => ({
+              name: it.name, mime: it.mime, b64: it.b64, w: it.w, h: it.h,
+            }));
+          }
+          return o;
+        }),
       }),
     });
     await loadChats();
@@ -854,12 +994,18 @@ async function send() {
 
   const useThink = $("opt-think").checked;
   const userMsg = { role: "user", content: text };
-  if (imgs.length) userMsg.images = imgs;
+  if (imgs.length) {
+    // 存瘦身版：dataUrl 只是 base64 的包装，落盘不需要
+    userMsg.images = imgs.map(it => ({
+      name: it.name, mime: it.mime, b64: it.b64, w: it.w, h: it.h,
+    }));
+  }
   state.messages.push(userMsg);
   if (!state.title) {
-    const t = text || ("［图片］" + (imgs[0] ? imgs[0].name : ""));
-    state.title = t.slice(0, 24) + (t.length > 24 ? "…" : "");
+    state.title = makeTitle(text, imgs);
+    state.titleAuto = true;
   }
+  setStick(true);      // 自己发消息时永远跟随底部
   const asst = { role: "assistant", content: "", thinking: "" };
   state.messages.push(asst);
   renderMessages();
@@ -875,15 +1021,7 @@ async function send() {
     model: state.modelId,
     stream: true,
     think: useThink,
-    messages: state.messages
-      .filter(m => m.role === "user" || (m.role === "assistant" && m.content))
-      .map(m => {
-        const o = { role: m.role, content: m.content };
-        if (m.role === "user" && m.images && m.images.length) {
-          o.images = m.images.map(i => i.b64);
-        }
-        return o;
-      }),
+    messages: buildPayloadMessages(),
   };
 
   try {
@@ -921,7 +1059,7 @@ async function send() {
         if (m.thinking) asst.thinking += m.thinking;
         // 每来一块就重绘当前这条（只动最后一条，避免整屏闪烁）
         node = refreshLast(node, asst);
-        boxEl.scrollTop = boxEl.scrollHeight;
+        if (state.stick) boxEl.scrollTop = boxEl.scrollHeight;
         if (obj.done) {
           const ec = obj.eval_count || 0, ed = obj.eval_duration || 0;
           if (ec && ed) asst.stats = ec + " tokens · " + (ec / (ed / 1e9)).toFixed(1) + " tok/s";
@@ -942,6 +1080,7 @@ async function send() {
     // 少了这一步 chatId 一直是 null，对话永远不落盘（踩过）。
     await ensureChat();
     await saveChat();
+    maybeAutoTitle();
   } catch (e) {
     if (e.name === "AbortError") {
       if (!asst.content) {
@@ -1344,6 +1483,25 @@ async function init() {
       btn.disabled = false;
       refreshResidency();
     }
+  };
+
+  // ---- 贴底：只有本来就在底部才跟随流式输出
+  const msgBox = $("messages");
+  msgBox.addEventListener("scroll", () => {
+    const gap = msgBox.scrollHeight - msgBox.scrollTop - msgBox.clientHeight;
+    setStick(gap <= 64);
+  }, { passive: true });
+  $("btn-jump").onclick = () => {
+    msgBox.scrollTop = msgBox.scrollHeight;
+    setStick(true);
+  };
+
+  // ---- 自动标题开关（存本机，不上传）
+  const at = $("opt-autotitle");
+  at.checked = autoTitleOn();
+  at.onchange = () => {
+    localStorage.setItem("ui.autoTitle", at.checked ? "1" : "0");
+    if (at.checked) maybeAutoTitle();
   };
 
   $("btn-new").onclick = () => newChat();
