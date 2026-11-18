@@ -584,7 +584,7 @@ def main():
     p_au.add_argument("action", choices=["on", "off", "status"])
     p_ul = sub.add_parser("unload", help="卸载驻留模型（释放显存）；省略名字 = 全部")
     p_ul.add_argument("model", nargs="?", default=None,
-                      help="模型名，例如 humanizer-12b；省略则卸载全部")
+                      help="模型名，例如 galtransl-37；省略则卸载全部")
     p_ul.add_argument("--force", action="store_true",
                       help="忽略 protected 名单，强行卸载")
     p_rs = sub.add_parser("residency",

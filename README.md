@@ -118,7 +118,7 @@ llama-swap 默认 `globalTTL: 0` = **永不自动卸载**。一个 5–6GB 模�
 {
   "auto_unload": true,
   "idle_ttl": 1800,
-  "per_model_ttl": { "humanizer-12b": 600 },
+  "per_model_ttl": { "hunyuan-mt-7b": 600 },
   "protected": ["qwen35-4b-heretic"]
 }
 ```
@@ -174,7 +174,7 @@ llama-swap 默认 `globalTTL: 0` = **永不自动卸载**。一个 5–6GB 模�
 
 `vram_budget.py` 为什么重要 —— 一个真实的翻车案例：
 
-> `GalTransl-7B-v2.6_Q6_k` 看着只比 Q4 大一点点，但它是**全 MHA 无 GQA** 架构
+> `GalTransl-7B-v2.6_Q6_k`（本机已移除，案例留着）看着只比 Q4 大一点点，但它是**全 MHA 无 GQA** 架构
 > （`kv_heads=32, head_dim=128`），每 token 的 KV 是同尺寸 GQA 模型的 4 倍。
 > 权重 5.91 GiB + 8K 上下文 KV 2.00 GiB = **7.91 GiB**，8G 卡装不下。
 > 而且 `-ngl 99` 是显式写的，`--fit` 不会帮你缩层 —— 结果就是加载失败。
@@ -185,8 +185,7 @@ llama-swap 默认 `globalTTL: 0` = **永不自动卸载**。一个 5–6GB 模�
 | 模型 | 权重 | ctx | KV | 合计 | 判定 |
 |---|---|---|---|---|---|
 | `qwen35-9b-heretic` | 5.24 | 16384 | 1.00 | 6.24 | 安全 |
-| `galtransl-7b` | 5.91 | 4096 | 1.00 | 6.91 | 紧 |
-| `humanizer-12b` | 5.20 | 8192 | 0.22 | 5.42 | 安全（SWA 混合注意力，KV 极省） |
+| `galtransl-37` | 3.96 | 4096 | 0.11 | 4.07 | 安全 |
 
 ### 8GB 卡的 ctx 天花板怎么算
 
@@ -205,7 +204,6 @@ qwen35 系（32 层 × 4 kv_heads × 256）在 q8_0 下正好是 **64 KiB/token*
 |---|---|---|---|---|
 | `qwen35-9b` | 5.24 | 1.86 | ≈ 29.7K | 16384（留余量给别人/碎片） |
 | `qwen35-4b` | 2.52 | 4.58 | ≈ 73K | 32768 |
-| `galtransl-7b`（全 MHA） | 5.91 | 1.19 | ≈ 12.7K | 4096（8K 实测 7.91 GiB，装不下） |
 
 ⚠ **别照抄大卡配方**。同一个 9B 写 `-c 32768` 要 7.24 GiB，直接超预算；而且 `-ngl 99`
 是显式写的，`--fit` 不会帮你缩层，结果是加载失败而不是自动降级。加新模型前先跑一次
@@ -263,7 +261,7 @@ python scripts\service_ctl.py start     :: 或者纯命令行
 > `--sync-bases` 为什么必须跑：桥对外暴露哪些模型名，取决于 `config/personas.json` 的
 > `bases`（llama-swap 那边只认 yaml）。只改 yaml 的话，客户端调用会报「模型不存在」。
 > 这条命令**只增不改不删** —— 你手工调过的 `ctx`、别名、`supported` 都不会被覆盖，
-> 且会先备份。纯内部用的辅助模型（例如只走 `/completion` 的去 AI 味改写器）可以不登记，
+> 且会先备份。纯内部用的辅助模型（例如只走 `/completion` 的脚本批处理模型）可以不登记，
 > 桥就不会把它当成对外模型暴露。
 
 ---
@@ -341,7 +339,6 @@ python scripts\test_lifecycle_live.py 真实启停服务（需要模型与显存
 scripts/    桥、服务控制、驻留管理、托盘、工具链
 config/     配置模板与人格（真实人格与路径不入库）
 ui/         单文件聊天界面（零依赖）
-humanizer/  示例模块：去 AI 味改写（纯 completion 模型，挂 /humanize）
 turtle/     示例模块：海龟汤（本地 LLM 判题，挂 /turtle）
 ```
 

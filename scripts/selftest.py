@@ -376,13 +376,13 @@ def main():
         def t_swap():
             t0 = time.time()
             st, d1 = req(port, "POST", "/api/chat", {
-                "model": "galtransl-7b", "stream": False, "think": False,
+                "model": "galtransl-37", "stream": False, "think": False,
                 "messages": [{"role": "user", "content": "こんにちは、元気ですか？"}],
                 "options": {"num_predict": 60},
             })
             t_gal = time.time() - t0
             if st != 200 or d1.get("error"):
-                return FAIL, f"galtransl-7b（6.0GB，显存最紧张）加载或推理失败: {str(d1)[:250]}"
+                return FAIL, f"galtransl-37（4.25GB）加载或推理失败: {str(d1)[:250]}"
             got = (d1.get("message") or {}).get("content", "")
             t0 = time.time()
             st, d2 = req(port, "POST", "/api/chat", {
@@ -393,9 +393,9 @@ def main():
             t_swap2 = time.time() - t0
             if st != 200 or d2.get("error"):
                 return FAIL, f"切到 qwen35-4b-heretic 失败: {str(d2)[:250]}"
-            return PASS, (f"galtransl-7b 加载+推理 {t_gal:.1f}s（输出 {got[:40]!r}）；"
+            return PASS, (f"galtransl-37 加载+推理 {t_gal:.1f}s（输出 {got[:40]!r}）；"
                           f"再切 qwen35-4b-heretic {t_swap2:.1f}s")
-        check("跨底座换载 + 最大显存模型", t_swap)
+        check("跨底座换载 + 重显存模型", t_swap)
 
     # ---------------------------------------------------------------- 汇总
     if FIX:                     # 收尾：删掉测试期间建的探针人格

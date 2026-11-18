@@ -557,7 +557,7 @@ def static_file(rel):
         rel += "index.html"
     full = os.path.normpath(os.path.join(UI_DIR, rel))
     # 必须带 os.sep：否则 ui 的**同前缀兄弟目录**（例如 ui-old）里的文件
-    # 也能通过前缀判断。同项目 turtle_web / humanizer_web 就是带 sep 的写法。
+    # 也能通过前缀判断。同项目 turtle_web 就是带 sep 的写法。
     if not (full == UI_DIR or full.startswith(UI_DIR + os.sep)) or not os.path.isfile(full):
         return None, None
     ext = os.path.splitext(full)[1].lower()

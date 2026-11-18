@@ -162,7 +162,7 @@ def bootstrap_personas(bases=None):
         for p in data.get("personas") or []:
             if p.get("base") not in real:
                 p["base"] = first
-        # 别名也要登记：客户端用 Ollama 旧名（如 GalTransl-7B-v2.6:Q6_k）调用时，
+        # 别名也要登记：客户端用 Ollama 旧名（如 qwen-3.5-4b-heretic:latest）调用时，
         # 桥必须先认识这个名字才转得出去，否则一律 404。
         aliases = {}
         for bid, b in real.items():

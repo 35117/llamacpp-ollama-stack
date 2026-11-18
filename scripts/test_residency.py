@@ -6,6 +6,7 @@
 """
 import json
 import os
+import shutil
 import sys
 import threading
 import time
@@ -78,14 +79,20 @@ def main():
 
     # 用临时策略文件，避免动到真实 config
     tmp_policy = os.path.join(ROOT, "logs", "_test_residency_policy.json")
+    # ⚠ 必须每轮从真实策略复制一份做基准：否则上一次运行写回的
+    #   protected: [] / 被改过的 idle_ttl 会污染下一轮 ——
+    #   「protected 不自动卸载」两条用例会在空名单上失败。
+    real_policy = os.path.join(ROOT, "config", "residency.json")
+    if os.path.isfile(real_policy):
+        shutil.copy2(real_policy, tmp_policy)
     residency.POLICY_PATH = tmp_policy
 
     # ---------------- 1. swap 可达性
     check("swap 探活 up()", residency and swap_ctl.up() is True)
 
     # ---------------- 2. 定向卸载
-    STATE["running"] = ["humanizer-12b", "qwen35-4b-heretic"]
-    ok, msg = residency.unload("humanizer-12b")
+    STATE["running"] = ["lfm3-1.7b", "qwen35-4b-heretic"]
+    ok, msg = residency.unload("lfm3-1.7b")
     check("定向卸载只卸指定的那个",
           ok and STATE["running"] == ["qwen35-4b-heretic"], msg)
 
@@ -100,8 +107,9 @@ def main():
     check("全部卸载 -> 驻留清空", ok and STATE["running"] == [], msg)
 
     # ---------------- 5. 闲置超时 -> candidates() 命中
-    #   ⚠ 别挑 galtransl-7b：它在 per_model_ttl 里有覆盖（600s），
-    #     这里要测的是「走默认 idle_ttl」的路径，所以挑一个没有覆盖的名字。
+    #   ⚠ 别挑 protected 里的模型（qwen35-4b-heretic / galtransl-37），
+    #     也别挑 per_model_ttl 里有覆盖的名字 —— 这里要测的是
+    #     「走默认 idle_ttl」的路径，所以挑一个两处都没有的名字。
     TARGET = "hunyuan-mt-7b"
     STATE["running"] = [TARGET]
     residency.save_policy({"idle_ttl": 2})
@@ -127,13 +135,13 @@ def main():
     check("protected 模型加 --force 可强卸", ok is True, msg)
 
     # ---------------- 7. reap() 真的执行卸载
-    STATE["running"] = ["galtransl-7b"]
+    STATE["running"] = ["lfm3-1.7b"]
     with residency._lock:
-        residency._last_use["galtransl-7b"] = time.time() - 99999
-        residency._seen_at["galtransl-7b"] = time.time() - 99999
+        residency._last_use["lfm3-1.7b"] = time.time() - 99999
+        residency._seen_at["lfm3-1.7b"] = time.time() - 99999
     done = residency.reap()
     check("reap() 执行卸载并清空驻留",
-          done == ["galtransl-7b"] and STATE["running"] == [], str(done))
+          done == ["lfm3-1.7b"] and STATE["running"] == [], str(done))
 
     # ---------------- 8. 策略热改生效
     residency.save_policy({"idle_ttl": 4242})
@@ -141,11 +149,11 @@ def main():
           residency.load_policy()["idle_ttl"] == 4242)
 
     # ---------------- 9. snapshot() 结构完整
-    STATE["running"] = ["galtransl-7b"]
+    STATE["running"] = ["lfm3-1.7b"]
     snap = residency.snapshot()
     r = snap["resident"][0]
     check("snapshot 含 model/idle_sec/ttl/protected",
-          snap["swap_up"] and r["model"] == "galtransl-7b"
+          snap["swap_up"] and r["model"] == "lfm3-1.7b"
           and r["protected"] is False and isinstance(r["ttl"], int),
           json.dumps(r, ensure_ascii=False))
 

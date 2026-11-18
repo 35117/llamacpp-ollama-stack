@@ -14,9 +14,9 @@ model 字段自动拉起/换出后端进程。但 **llama-swap 默认 `globalTTL
   1. **卸载要确认真的生效。** 以前请求回 200 就报成功，而 `service_ctl` 直接
      拿它当进程退出码 —— 自动化脚本拿到 exit 0 以为显存释放了，其实模型还
      挂着，下一次加载必炸（见 `swap_ctl.unload` 的注释）。
-  2. **闲置自动卸载要能统一配。** 只有 humanizer-12b 单独配了 `ttl: 600`，
-     其余 7 个模型全靠 `globalTTL: 0`。而且 humanizer 改写长文要跑几分钟，
-     这期间用户在界面上聊别的模型 → 5.5 + 6.2 GiB 双驻留，8G 卡必炸。
+  2. **闲置自动卸载要能统一配。** 以前只有个别模型在 yaml 里单独配 `ttl`，
+     其余全靠 `globalTTL: 0`。而长文/大上下文任务一跑就是几分钟，
+     这期间用户在界面上聊别的模型 → 两个 5~6 GiB 模型双驻留，8G 卡必炸。
      所以需要一个**全局策略**：所有模型统一闲置多久卸载，个别模型可覆盖，
      常用的那个可以设成「永不自动卸载」。
 
@@ -36,7 +36,7 @@ llama-swap 的具体版本。
       "auto_unload": true,          # 总开关
       "idle_ttl": 1800,             # 默认闲置上限（秒）
       "check_interval": 60,         # reaper 检查间隔（秒）
-      "per_model_ttl": {"humanizer-12b": 600},   # 个别覆盖
+      "per_model_ttl": {"hunyuan-mt-7b": 600},   # 个别覆盖
       "protected": ["qwen35-4b-heretic"]        # 永不自动卸载
     }
 

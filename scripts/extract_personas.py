@@ -122,13 +122,6 @@ BASES = {
         "ctx": 16384,
         "ollama_alias": ["qwen3.5-9b-nsfw-rp:latest"],
     },
-    "galtransl-7b": {
-        "gguf": "GalTransl-7B-v2.6_Q6_k.gguf",
-        "file_name": "GalTransl 7B v2.6.10",
-        "desc": "轻小说 / 视觉小说翻译专用（日→中）",
-        "ctx": 8192,
-        "ollama_alias": ["GalTransl-7B-v2.6:Q6_k"],
-    },
     "hunyuan-mt-7b": {
         "gguf": "Huihui-Hunyuan-MT-Chimera-7B-abliterated-GGUF_Q4_K_M.gguf",
         "file_name": "Huihui Hunyuan MT Chimera 7B Abliterated",
@@ -374,7 +367,6 @@ def main():
         "ds-r1-heretic:latest": "ds-r1-heretic-zh",
         "qwen3.5:2b": "qwen35-2b",
         "qwen-3.5-4b-heretic:latest": "qwen35-4b-heretic",
-        "GalTransl-7B-v2.6:Q6_k": "galtransl-7b",
         "Huihui-Hunyuan-MT-Chimera-7B-abliterated-GGUF:Q4_K_M": "hunyuan-mt-7b",
         "nomic-embed-text:latest": "nomic-embed",
     }

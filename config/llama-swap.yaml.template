@@ -30,7 +30,7 @@ includeAliasesInList: true   # 别名也出现在 /v1/models 里
 # globalTTL: 闲置多少秒后自动卸载；0 = 永不自动卸载。
 # ⚠「多久没用自动卸载」**不在这里配** —— 统一在 config/residency.json：
 #     {"auto_unload": true, "idle_ttl": 1800,
-#      "per_model_ttl": {"humanizer-12b": 600}, "protected": ["qwen35-4b-heretic"]}
+#      "per_model_ttl": {"hunyuan-mt-7b": 600}, "protected": ["qwen35-4b-heretic"]}
 #   由桥里的 reaper 线程按「最后使用时间」执行（scripts/residency.py）。
 #   好处是改完热生效、能查「还有多久会被卸」，且不依赖 llama-swap 版本。
 #   这里保持 0，免得两套机制互相打架（llama-swap 可能卸掉我们想保护的模型）。
@@ -156,27 +156,6 @@ models:
       context: 32768
 
   # ------------------------------------------------------------------- 翻译系
-  # ⚠ 这个权重是**全 MHA 无 GQA** 的架构（arch=qwen2, kv_heads=32, head_dim=128），
-  #   每 token 的 KV 是同尺寸 GQA 模型的 4 倍（q8_0 下 0.25 MB/token）。
-  #   权重 5.91 GiB + 8K 上下文 KV 2.00 GiB = 7.91 GiB —— 8G 卡装不下
-  #   （还要留 ~0.9 GiB 给 CUDA 上下文与计算缓冲）。
-  #   所以上下文压到 4K：KV 1.00 GiB，合计 6.91 GiB。
-  #   ⚠ 改档前先跑：python scripts\vram_budget.py models\<文件> --ctx <n>
-  "galtransl-7b":
-    name: "GalTransl 7B v2.6.10"
-    description: "轻小说 / 视觉小说翻译专用（日→中）。权重 5.9GB，显存最紧张的一个"
-    cmd: |
-      {{ROOT}}/bin/llama-server.exe
-      --host 127.0.0.1 --port ${PORT}
-      -m {{ROOT}}/models/GalTransl-7B-v2.6_Q6_k.gguf
-      -ngl 99 -c 4096 -fa on -ctk q8_0 -ctv q8_0
-      -np 1 -b 1024 -ub 256
-      --jinja --metrics
-    aliases:
-      - "GalTransl-7B-v2.6:Q6_k"
-    capabilities:
-      context: 4096
-
   "hunyuan-mt-7b":
     name: "Huihui Hunyuan MT Chimera 7B"
     description: "混元翻译模型（多语种互译）"
@@ -192,37 +171,79 @@ models:
     capabilities:
       context: 16384
 
-  # ------------------------------------------------- 文本润色（去 AI 味）
-  # humanizer-12B：把 AI 写的稿子改写成「像人写的」，且保住每个数字/日期/名字。
+  # ----------------------------------------------------- 本地小模型 / Agent 层
+  # LFM3 1.7B（Liquid AI，2026-10-27）：24 层 tri-hybrid —— 13 层门控短卷积 +
+  #   5 层滑窗注意力（窗口 256）+ 6 层全局注意力。
+  #   定位不是「懂很多」，而是「会调度」：BFCL V4 71.39 / ToolSandbox 80.36
+  #   在同级里领先，IFEval 96.66 适合结构化输出与 JSON。但 HLE 只有 7.17，
+  #   **不能当知识库**，问世界的答案要转给 qwen35-9b-heretic。
   #
-  # ⚠️ 这是**纯 completion 模型**（gemma-4-12B 微调），不是聊天模型：
-  #    只有 /completion 端点 + 字节级精确 prompt 才有正确输出，走 chat 会被
-  #    套上通用模板，直接变成「Sure, here is...」。
-  #    调用逻辑见 humanizer/humanizer_core.py，页面挂在桥上：
-  #        http://127.0.0.1:11434/humanize
+  # ⚠ 上下文给 64K，不给官方的 256K：显存上 128K 也放得下（1.78 GiB），
+  #   但这模型 RULER 128K 只有 65.56 —— 「塞得进去、捞不准」，虚设没意义。
+  #   实测占用（python scripts\vram_budget.py models\LFM3-1.7B-Heretic-Abliterated-i1-Q4_K_M.gguf）：
+  #   权重 1.02 GiB，32K KV 0.19、64K KV 0.38、128K KV 0.75（均 q8_0）。
+  #   KV 这么省是因为混合注意力：SWA 那 5 层占用恒定，不随 ctx 增长。
   #
-  # 量化选 Q3-QAT：8G 显存下这是唯一能全量入显存的档位 ——
-  #    权重 5322 MiB + KV 323 MiB + compute 132 MiB ≈ 5.8GB，31 tok/s。
-  #    KV 特别省是因为 gemma4 是混合注意力：48 层里 8 层全局 + 40 层 SWA(窗口 1024
-  #    且 KV 维度减半)，8K 上下文 KV 只要 0.32GB。别按 12B dense 的经验估它。
-  # Q8_0(12.7G)/Q6_K(10G)/Q4_K_M(7.6G) 都装不下（本机 D 盘也只剩 38GB）。
-  "humanizer-12b":
-    name: "Humanizer 12B（去 AI 味）"
-    description: "把 AI 稿子改写成「人写的」· 事实/数字保真 · 纯 completion 模型"
-    # 空闲 TTL：多久没有任何请求就把这个模型从显存卸掉（秒）。
-    # 本功能是**低频工具**（写完稿子才用一次），却要占 5.8GB 显存，
-    # 8G 卡上会把聊天模型挤掉 —— 所以让它闲下来自己让位。
-    # 重载一次约 10 秒；嫌久就调大，嫌占显存就调小。
-    ttl: 600
+  # ⚠ 需要较新的 llama.cpp：'lfm3' 是新增架构，本部署 b11146 直接报
+  #   `unknown model architecture: 'lfm3'`，升到 b12020 后才加载成功。
+  #   换回旧构建的话这一段会启动失败，记得连着 bin/ 一起看。
+  #
+  # 权重用 Vortecks 的 heretic+abliterated（i1 = imatrix 量化），不是官方原版：
+  #   2026-11-03 同参数实测 —— 工具调用 76 tokens（原版 92）、JSON 抽取 36 tokens
+  #   逐字一致、生成速度 139.7 → 约 160 t/s。没有能力退化。
+  #   但要说清楚：原版 1.7B 的 refusal 本来就很弱（粗口吐槽请求它照样照做），
+  #   所以「去审查」在这里的收益≈0，换它的真实理由是 imatrix 量化更快。
+  "lfm3-1.7b":
+    name: "LFM3 1.7B Heretic"
+    description: "本地 Agent 调度层 · 工具调用/JSON 结构化输出 · 社区去审查版 · 无世界知识"
     cmd: |
       {{ROOT}}/bin/llama-server.exe
       --host 127.0.0.1 --port ${PORT}
-      -m {{ROOT}}/models/humanizer-12b-Q3-QAT.gguf
-      -ngl 99 -c 8192 -fa on -ctk q8_0 -ctv q8_0
+      -m {{ROOT}}/models/LFM3-1.7B-Heretic-Abliterated-i1-Q4_K_M.gguf
+      -ngl 99 -c 65536 -fa on -ctk q8_0 -ctv q8_0
       -np 1 -b 2048 -ub 512
-      --metrics
+      --jinja --reasoning-format deepseek --metrics
+    aliases:
+      - "lfm3-1.7b:latest"
     capabilities:
-      context: 8192
+      in: [text]
+      tools: true
+      context: 65536
+
+  # ------------------------------------------------------ 全模态 / 看 + 听
+  # LFM3-Omni-2B（abliter8-ai 去审查版）：2.17B = 1.7B 语言主干 + 视觉编码器 +
+  #   16kHz 因果音频编码器 + LiquidCodec/depthformer（24kHz 语音输出）。
+  #   去审查只改语言主干的 32 个残差写入矩阵，视觉/音频编码器原样保留 ——
+  #   实测改完图像与音频识别都正常。
+  #
+  # ⚠ **llama.cpp 下只有输入侧完整**：图像、音频、视频帧都能进
+  #   （b12020 的 mtmd 实测 --image 896ms / --audio 215ms 都通）；
+  #   但没有 TTS 输出通路 —— 语音合成那半是 depthformer + LiquidCodec，
+  #   llama.cpp 不实现。也就是：能听能看，不会说。
+  #
+  # ⚠ non-reasoning 模型：**不要**加 --reasoning-format deepseek，
+  #   它每次回答都以空 <think></think> 开头。反过来好处是工具调用极省 token
+  #   （实测 19 tokens，1.7B 要 76–92）。
+  #
+  # 显存：权重 1.02 + mmproj 0.95 + 32K KV 0.19 ≈ 2.2 GiB，8G 卡余量充足。
+  #   ctx 取官方上限 32K（再大也不支持）。
+  "lfm3-omni-2b":
+    name: "LFM3 Omni 2B Abliter8"
+    description: "全模态去审查版 · 看图/听音频/视频帧 + 工具调用 · 不能合成语音"
+    cmd: |
+      {{ROOT}}/bin/llama-server.exe
+      --host 127.0.0.1 --port ${PORT}
+      -m {{ROOT}}/models/LFM3-Omni-2B-Abliter8-Q4_K_M.gguf
+      -mm {{ROOT}}/models/mmproj-LFM3-Omni-2B-Abliter8-BF16.gguf
+      -ngl 99 -c 32768 -fa on -ctk q8_0 -ctv q8_0
+      -np 1 -b 2048 -ub 512
+      --jinja --metrics
+    aliases:
+      - "lfm3-omni:latest"
+    capabilities:
+      in: [text, image, audio]
+      tools: true
+      context: 32768
 
   # ----------------------------------------------------------------- Embedding
   "nomic-embed":

@@ -4,8 +4,8 @@
 
 为什么需要它：llama-swap 默认 **globalTTL: 0（不自动卸载）**，一个 5~6GB 的
 模型跑过一次就会一直占着显存，8G 卡上直接影响别的模型能不能加载。
-本模块把 swap 自带的卸载端点包成函数，供 `service_ctl.py`、humanizer 页面
-和任何脚本复用（**别再各写一份 HTTP 调用**）。
+本模块把 swap 自带的卸载端点包成函数，供 `service_ctl.py` 和任何脚本复用
+（**别再各写一份 HTTP 调用**）。
 
 端点行为（v260 / commit fcefa7b 实测确认，别想当然）：
 
@@ -90,7 +90,7 @@ def running(base=SWAP_BASE, timeout=8):
 
 
 def running_names(base=SWAP_BASE, timeout=8):
-    """当前驻留的模型名列表，例如 ['humanizer-12b']。"""
+    """当前驻留的模型名列表，例如 ['qwen35-4b-heretic']。"""
     return [m.get("model") for m in running(base=base, timeout=timeout) if m.get("model")]
 
 

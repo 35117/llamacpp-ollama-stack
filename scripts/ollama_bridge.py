@@ -40,10 +40,6 @@ try:
     import turtle_web  # noqa: E402  （海龟汤小游戏，挂在 /turtle 下）
 except Exception:      # noqa: BLE001  —— 缺了也不能让桥起不来
     turtle_web = None
-try:
-    import humanizer_web  # noqa: E402  （去 AI 味重写，挂在 /humanize 下）
-except Exception:         # noqa: BLE001  —— 同上，缺了只影响这一个功能
-    humanizer_web = None
 
 # ---------------------------------------------------------------- 配置
 
@@ -61,9 +57,6 @@ DEFAULT_BRIDGE_CFG = {
 
 # 海龟汤小游戏的挂载前缀（实现在 scripts/turtle_web.py）
 TURTLE_PREFIX = "/turtle"
-
-# 「去 AI 味」重写的挂载前缀（实现在 scripts/humanizer_web.py）
-HUMANIZE_PREFIX = "/humanize"
 
 # 请求里 Ollama 的 options -> OpenAI/llama.cpp 请求体字段
 OPTION_MAP = {
@@ -626,8 +619,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
     def _is_admin_route(self, path):
         return path in ("/ui", "/ui/") or path.startswith("/ui/") \
             or path.startswith("/admin/") \
-            or path == TURTLE_PREFIX or path.startswith(TURTLE_PREFIX + "/") \
-            or path == HUMANIZE_PREFIX or path.startswith(HUMANIZE_PREFIX + "/")
+            or path == TURTLE_PREFIX or path.startswith(TURTLE_PREFIX + "/")
 
     def _handle_admin(self, method, path, query):
         # 先把请求体一次性读完 —— HTTP/1.1 keep-alive 下，没读完的 body 会残留下来
@@ -645,10 +637,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
         # ---------- 海龟汤小游戏（挂在 /turtle，实现在 scripts/turtle_web.py）
         if path == TURTLE_PREFIX or path.startswith(TURTLE_PREFIX + "/"):
             return self._handle_turtle(method, path, body)
-
-        # ---------- 去 AI 味（挂在 /humanize，实现在 scripts/humanizer_web.py）
-        if path == HUMANIZE_PREFIX or path.startswith(HUMANIZE_PREFIX + "/"):
-            return self._handle_humanize(method, path, body)
 
         # ---------- 模型驻留（闲置自动卸载 / 手动卸载）
         if path == "/admin/residency" or path.startswith("/admin/residency/"):
@@ -745,7 +733,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             base=self.upstream.base if hasattr(self.upstream, "base") else None)
         return self._send_json(payload, status)
 
-    # ------------------------------------------------------ 去 AI 味（humanizer）
+    # ------------------------------------------------ 模型驻留（residency）
     def _handle_residency(self, method, body):
         """模型驻留：查状态 / 改策略 / 手动卸载。
 
@@ -778,46 +766,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
             return self._err("未知 action: %s" % action, status=400)
         except Exception as exc:      # noqa: BLE001
             return self._err(str(exc), status=500)
-
-    def _handle_humanize(self, method, path, body):
-        """把 /humanize 与 /humanize/api/* 交给 scripts/humanizer_web.py。
-
-        模型请求由 humanizer_web 直接发往 **llama-swap 上游（11435）**，
-        不走桥自己 —— 否则桥会递归调用自己。
-
-        `/humanize/api/stream` 是流式（ndjson）：长文逐块回传进度，
-        否则用户要对着空白屏幕等一两分钟。
-        """
-        if humanizer_web is None:
-            return self._err(
-                "「去 AI 味」模块未加载（scripts/humanizer_web.py 缺失或导入失败）",
-                status=503)
-        base = self.upstream.base if hasattr(self.upstream, "base") else None
-        name = humanizer_web.api_name(path)
-        if name is None:
-            rel = path[len(HUMANIZE_PREFIX):]
-            data, ctype = humanizer_web.static_file(rel)
-            if data is None:
-                return self._err("「去 AI 味」页面不存在（应为 humanizer/index.html）",
-                                 status=404)
-            return self._send_bytes(data, ctype)
-
-        # 流式：逐块把进度写出去
-        if name == "stream" and method == "POST":
-            self._begin_ndjson()
-            try:
-                for ev in humanizer_web.stream_run(body or {}, base=base):
-                    self._ndjson(ev)
-            except Exception as exc:  # noqa: BLE001
-                import traceback
-                sys.stderr.write(traceback.format_exc())
-                self._ndjson({"type": "error", "error": f"服务端异常: {exc}"})
-            finally:
-                self._end_chunked()
-            return
-
-        status, payload = humanizer_web.handle_api(method, name, body, base=base)
-        return self._send_json(payload, status)
 
     def _begin_ndjson(self):
         self.send_response(200)
@@ -1562,8 +1510,6 @@ def main():
         f"  OpenAI 协议          /v1/chat/completions /v1/models /v1/embeddings\n")
     if turtle_web is not None:
         sys.stderr.write(f"  小游戏（海龟汤）     http://{host}:{port}/turtle\n")
-    if humanizer_web is not None:
-        sys.stderr.write(f"  去 AI 味（重写）     http://{host}:{port}/humanize\n")
     sys.stderr.flush()
     try:
         srv.serve_forever()
