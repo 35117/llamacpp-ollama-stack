@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>去 AI 味 · 本地重写</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#fff; --panel-2:#f0f2f5; --line:#e3e6ea;
+    --fg:#1c2024; --fg-dim:#6b7280; --fg-mute:#9aa1ab;
+    --accent:#2f6fed; --accent-fg:#fff; --accent-soft:#e8f0fe;
+    --ok:#2e9e5b; --ok-bg:#e8f4ec; --warn:#c47f17; --warn-bg:#fdf3e2;
+    --danger:#d9453d; --danger-bg:#fbeceb;
+    --shadow:0 1px 2px rgba(16,24,40,.06),0 8px 24px rgba(16,24,40,.08);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#14171a; --panel:#1b1f23; --panel-2:#22272c; --line:#2c3238;
+      --fg:#e8eaed; --fg-dim:#a1a9b3; --fg-mute:#727b86;
+      --accent:#5b8cf7; --accent-fg:#0d1117; --accent-soft:#1e2a42;
+      --ok:#4cc07a; --ok-bg:#1e3329; --warn:#e0a63f; --warn-bg:#3a3020;
+      --danger:#e5645c; --danger-bg:#3a2321;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg);color:var(--fg);
+    font:14px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    display:flex;flex-direction:column;
+  }
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  textarea{font:inherit;color:inherit}
+
+  header{
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--line);
+  }
+  h1{font-size:16px;margin:0;font-weight:650;letter-spacing:.3px}
+  h1 span{color:var(--accent)}
+  .tag{
+    font-size:12px;padding:3px 9px;border-radius:999px;
+    background:var(--accent-soft);color:var(--accent);white-space:nowrap;
+  }
+  .tag.warn{background:var(--warn-bg);color:var(--warn)}
+  .tag.err{background:var(--danger-bg);color:var(--danger)}
+  .tag.ok{background:var(--ok-bg);color:var(--ok)}
+  .spacer{flex:1}
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:6px;
+    padding:7px 15px;border-radius:8px;border:1px solid var(--line);
+    background:var(--panel-2);transition:background .12s,border-color .12s;
+  }
+  .btn:hover:not(:disabled){background:var(--accent-soft);border-color:var(--accent)}
+  .btn.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+  .btn.primary:hover:not(:disabled){filter:brightness(1.08);background:var(--accent)}
+  .btn.sm{padding:4px 10px;font-size:12.5px;border-radius:6px}
+
+  main{flex:1;display:flex;min-height:0}
+  .col{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+  .col + .col{border-left:1px solid var(--line)}
+  .col-head{
+    display:flex;align-items:center;gap:8px;padding:10px 16px;
+    border-bottom:1px solid var(--line);background:var(--panel);
+    font-size:12.5px;color:var(--fg-dim);
+  }
+  .col-head .spacer{flex:1}
+  textarea{
+    flex:1;width:100%;border:none;outline:none;resize:none;padding:16px 18px;
+    background:var(--panel);line-height:1.75;
+  }
+  #out{
+    flex:1;overflow-y:auto;padding:16px 18px;background:var(--panel);
+    white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;
+  }
+  #out .ph{color:var(--fg-mute)}
+
+  /* 进度 */
+  #prog{display:none;padding:8px 16px;border-top:1px solid var(--line);background:var(--panel-2)}
+  #prog.on{display:block}
+  #prog .bar{height:4px;border-radius:99px;background:var(--line);overflow:hidden}
+  #prog .bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .25s}
+  #prog .ptxt{font-size:12px;color:var(--fg-dim);margin-top:6px;display:flex;gap:10px;flex-wrap:wrap}
+  #prog .ptxt .cur{color:var(--fg-mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%}
+
+  /* 检查面板 */
+  #report{
+    border-top:1px solid var(--line);background:var(--panel-2);
+    max-height:34vh;overflow-y:auto;padding:12px 16px;display:none;
+  }
+  #report.on{display:block}
+  #report h3{font-size:12.5px;margin:0 0 8px;color:var(--fg-dim);font-weight:600}
+  .row{
+    display:flex;gap:10px;align-items:baseline;padding:7px 10px;border-radius:8px;
+    background:var(--panel);border:1px solid var(--line);margin-bottom:6px;font-size:12.5px;
+  }
+  .row .idx{color:var(--fg-mute);flex:0 0 auto}
+  .row .msg{flex:1;min-width:0;word-wrap:break-word}
+  .row.bad{border-color:var(--danger);background:var(--danger-bg)}
+  .row.warn{border-color:var(--warn);background:var(--warn-bg)}
+  .row.ok{border-color:var(--ok);background:var(--ok-bg)}
+  code{background:var(--panel-2);padding:1px 5px;border-radius:4px;font-size:12px}
+  .nums{color:var(--danger);font-weight:600}
+
+  .foot{
+    padding:9px 16px;border-top:1px solid var(--line);background:var(--panel);
+    font-size:12px;color:var(--fg-mute);display:flex;gap:14px;flex-wrap:wrap;align-items:center;
+  }
+  .toast{
+    position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(10px);
+    background:var(--fg);color:var(--bg);padding:9px 16px;border-radius:99px;
+    font-size:13px;z-index:99;box-shadow:var(--shadow);opacity:0;transition:opacity .2s,transform .2s;
+    pointer-events:none;
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast.err{background:var(--danger);color:#fff}
+  @media (max-width:820px){
+    main{flex-direction:column}
+    .col + .col{border-left:none;border-top:1px solid var(--line)}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>去 <span>AI 味</span></h1>
+  <span class="tag" id="tag-model">模型检查中…</span>
+  <span class="spacer"></span>
+  <button class="btn sm" id="btn-sample">载入示例</button>
+  <button class="btn sm" id="btn-clear">清空</button>
+  <button class="btn sm" id="btn-unload" title="把模型从显存里卸掉">检查显存…</button>
+  <button class="btn primary" id="btn-run">开始重写</button>
+</header>
+
+<main>
+  <section class="col">
+    <div class="col-head">
+      <span>原文（AI 写的稿子）</span>
+      <span class="spacer"></span>
+      <span id="in-stat">—</span>
+      <button class="btn sm" id="btn-paste">粘贴</button>
+    </div>
+    <textarea id="in" spellcheck="false"
+      placeholder="把 AI 生成的邮件、报告、论文段落粘进来，右边会给出「像人写的」版本。&#10;&#10;规则：每一个数字、单位、日期、人名都会被保留；不改事实，只改语气与结构。"></textarea>
+  </section>
+
+  <section class="col">
+    <div class="col-head">
+      <span>改写结果</span>
+      <span class="spacer"></span>
+      <span id="out-stat">—</span>
+      <button class="btn sm" id="btn-copy">复制</button>
+    </div>
+    <div id="out"><span class="ph">结果会显示在这里。</span></div>
+    <div id="prog">
+      <div class="bar"><i id="prog-bar"></i></div>
+      <div class="ptxt">
+        <span id="prog-txt">准备中…</span>
+        <span class="cur" id="prog-cur"></span>
+      </div>
+    </div>
+    <div id="report"></div>
+  </section>
+</main>
+
+<div class="foot">
+  <span id="foot-model">—</span>
+  <span id="foot-time">—</span>
+  <span class="spacer" style="flex:1"></span>
+  <span>⚠ 数字、日期、人名的方向请自己核对一遍</span>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+/* 「去 AI 味」前端。后端 = 桥上 /humanize/api/*。
+   改写走 /humanize/api/stream（ndjson 流式），长文能看见逐块进度。
+   零外部依赖（这台机器走代理，CDN 不可靠）。 */
+const $ = (id) => document.getElementById(id);
+const SAMPLE_EN = `Hi Nadia,
+
+I'm handing off the Meridian Bank loan audit to you. We've completed the review of 88 files, with 12 files remaining. The outstanding files are in the "Pending Review" folder in the Meridian Bank audit workspace, organized by borrower name.
+
+The remaining items are primarily commercial real estate loans and include several files requiring confirmation of updated income statements, collateral valuations, and covenant documentation. I've flagged the missing items in the audit tracker and added notes for the files that may need follow-up with Meridian Bank's loan operations team.
+
+The deadline is Friday, March 14. Please prioritize the files marked "High" in the tracker, especially MB-2047, MB-2091, and MB-2110, since those are scheduled for management review first. I'll be available through Wednesday afternoon to answer questions or provide context on any earlier decisions.
+
+Thanks for taking this over.`;
+
+const SAMPLE_ZH = `本次版本更新共涉及 37 个功能点，其中 12 个是用户呼声较高的需求。
+
+在性能方面，上一版本模型加载的平均耗时为 4.2 秒，本次更新后下降至 2.8 秒，降幅约为 33%。该数据在 8GB 显存、batch size 为 1 的条件下测得。
+
+在接口方面，我们在 /api/generate 中新增了 raw 参数。当该参数为 true 时，系统会直接返回未经包装的文本，以方便对接自定义脚本。
+
+最后，本次更新不包含数据迁移，历史会话记录将完整保留。`;
+
+let running = false;
+let outText = "";
+
+/* ---------------------------------------------------------------- 小工具 */
+function toast(msg, isErr){
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast show" + (isErr ? " err" : "");
+  clearTimeout(t._t);
+  t._t = setTimeout(() => { t.className = "toast"; }, 2800);
+}
+function setOut(s, isPlaceholder){
+  outText = isPlaceholder ? "" : s;
+  $("out").innerHTML = isPlaceholder
+    ? '<span class="ph">' + s + '</span>'
+    : s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function fmtBytes(n){
+  if (n < 1000) return n + " 字";
+  return (n/1000).toFixed(1) + "k 字";
+}
+function updateStats(){
+  const v = $("in").value;
+  $("in-stat").textContent = v.trim() ? fmtBytes(v.length) : "—";
+}
+
+/* ---------------------------------------------------------------- 状态 */
+async function loadStatus(){
+  try{
+    const r = await fetch("/humanize/api/status");
+    const d = await r.json();
+    if (!r.ok || !d.ready){
+      $("tag-model").className = "tag err";
+      $("tag-model").textContent = "模型不可用";
+      $("foot-model").textContent = d.error || "模型未就绪";
+      return;
+    }
+    const v = (d.variants || [])[0];
+    $("tag-model").className = "tag ok";
+    $("tag-model").textContent = v ? (d.model + " · " + v.gb + "GB") : d.model;
+    $("foot-model").textContent = v
+      ? ("权重 " + v.file + "（" + v.gb + "GB，" + v.note + "）")
+      : ("模型 " + d.model);
+    if (!d.prompt_fingerprint_ok){
+      $("tag-model").className = "tag warn";
+      $("tag-model").textContent += " · prompt 指纹异常";
+    }
+  }catch(e){
+    $("tag-model").className = "tag err";
+    $("tag-model").textContent = "连不上后端";
+    $("foot-model").textContent = "服务未启动？先跑 scripts\\service_ctl.py start";
+  }
+}
+
+/* ---------------------------------------------------------------- 检查展示 */
+const LABEL = {
+  empty:"结果为空",
+  prompt_echo:"模型把指令复读了（端点或模板有问题）",
+  chat_markers:"输出里混进了对话模板标记",
+  copy:"和原文太像（抄得太多）",
+  missing_numbers:"有数字没保住",
+  added_numbers:"多出了原文没有的数字",
+  language:"英文稿被写成了中文",
+  too_short:"结果偏短，可能漏了内容",
+  too_long:"结果偏长，可能自己加了内容",
+};
+function renderReport(pieces){
+  const bad = pieces.filter(p => (p.problems || []).length);
+  const box = $("report");
+  if (!pieces.length){ box.className = ""; return; }
+  const head = bad.length
+    ? `检查：${pieces.length} 块中 ${bad.length} 块需要看一下`
+    : `检查：${pieces.length} 块全部通过`;
+  let html = `<h3>${head}</h3>`;
+  if (!bad.length){
+    html += `<div class="row ok"><span class="msg">数字、结构、抄袭率都在阈值内。仍请人工核对人名与日期方向。</span></div>`;
+  }
+  for (const p of bad){
+    const sev = (p.problems.includes("missing_numbers") || p.problems.includes("language")
+                 || p.problems.includes("prompt_echo") || p.problems.includes("empty"))
+                ? "bad" : "warn";
+    const msgs = p.problems.map(k => LABEL[k] || k).join("；");
+    let extra = "";
+    if (p.missing_numbers && p.missing_numbers.length)
+      extra += ` 丢失：<span class="nums">${p.missing_numbers.join(", ")}</span>`;
+    if (p.added_numbers && p.added_numbers.length)
+      extra += ` 新增：${p.added_numbers.join(", ")}`;
+    html += `<div class="row ${sev}">
+      <span class="idx">第 ${p.i} 块</span>
+      <span class="msg">${msgs}${extra}<br><span style="color:var(--fg-mute)">抄袭率 ${(p.copy_rate*100).toFixed(0)}% · 用时 ${p.seconds}s</span></div>`;
+  }
+  box.innerHTML = html;
+  box.className = "on";
+}
+
+/* 显存驻留状态：模型加载要 ~10s，所以只在「用户点了按钮」或「空闲 TTL 到期」
+   时才从显存里卸掉。这里只负责把真实状态显示出来，不做任何自动卸载。 */
+async function refreshLoaded(){
+  const b = $("btn-unload");
+  try{
+    const r = await fetch("/humanize/api/models");
+    const d = await r.json();
+    const on = !!d.loaded;
+    b.disabled = !on;
+    b.textContent = on ? "释放显存" : "未占用显存";
+    b.title = on
+      ? "把 " + (d.running || []).join("、") + " 从显存卸掉，腾出空间给别的模型"
+      : "当前没有模型驻留显存";
+    if (on && d.running && d.running.length > 1){
+      b.title += "（注意：同时驻留 " + d.running.length + " 个）";
+    }
+  }catch(e){
+    b.disabled = true;
+    b.textContent = "显存状态未知";
+    b.title = "连不上后端";
+  }
+}
+
+async function unloadModel(){
+  const b = $("btn-unload");
+  b.disabled = true;
+  b.textContent = "释放中…";
+  try{
+    const r = await fetch("/humanize/api/unload", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+    const d = await r.json();
+    toast(d.message || (d.ok ? "已释放" : "释放失败"), !d.ok);
+  }catch(e){
+    toast("连不上后端", true);
+  }
+  refreshLoaded();
+}
+
+/* ---------------------------------------------------------------- 主流程 */
+async function run(){
+  if (running) return;
+  const text = $("in").value;
+  if (!text.trim()){ toast("先粘一段文字进来", true); return; }
+
+  running = true;
+  $("btn-run").disabled = true;
+  $("btn-run").textContent = "重写中…";
+  setOut("正在重写，请稍候…", true);
+  $("report").className = "";
+  $("prog").className = "on";
+  $("prog-bar").style.width = "0";
+  $("prog-txt").textContent = "正在分析分块…";
+  $("prog-cur").textContent = "";
+  $("out-stat").textContent = "—";
+  $("foot-time").textContent = "—";
+
+  try{
+    const res = await fetch("/humanize/api/stream", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok || !res.body){
+      let msg = "HTTP " + res.status;
+      try{ const j = await res.json(); if (j.error) msg = j.error; }catch(e){}
+      throw new Error(msg);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let acc = [];       // 已完成的块
+    let total = 0, done = 0;
+
+    while (true){
+      const { value, done: eof } = await reader.read();
+      if (eof) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines){
+        if (!line.trim()) continue;
+        let ev;
+        try{ ev = JSON.parse(line); }catch(e){ continue; }
+
+        if (ev.type === "plan"){
+          total = ev.pieces || 0;
+          $("prog-txt").textContent = total
+            ? `共 ${total} 块要改写（另有 ${ev.kept} 块原样保留）`
+            : "没有需要改写的正文";
+        } else if (ev.type === "piece_start"){
+          $("prog-txt").textContent = `第 ${ev.i}/${ev.n} 块…`;
+          $("prog-cur").textContent = ev.preview || "";
+        } else if (ev.type === "piece_done"){
+          done = ev.i;
+          acc.push(ev.text);
+          setOut(acc.join("\n\n"));
+          $("prog-bar").style.width = Math.round(done / Math.max(1, total) * 100) + "%";
+          $("out-stat").textContent = fmtBytes(outText.length);
+        } else if (ev.type === "done"){
+          setOut(ev.text || acc.join("\n\n"));
+          $("prog-bar").style.width = "100%";
+          renderReport(ev.pieces || []);
+          const s = ev.summary || {};
+          $("prog-txt").textContent = "完成";
+          $("prog-cur").textContent = "";
+          $("out-stat").textContent = fmtBytes((ev.text || "").length);
+          $("foot-time").textContent = `用时 ${s.seconds}s · ${s.pieces} 块`
+            + (s.flagged ? ` · ${s.flagged} 块需复核` : " · 全部通过");
+          if (s.flagged) toast(`${s.flagged} 块需要复核，见下方检查面板`, true);
+          else toast("重写完成");
+        } else if (ev.type === "error"){
+          throw new Error(ev.error || "改写失败");
+        }
+      }
+    }
+  }catch(e){
+    setOut("出错了：" + e.message, true);
+    toast(e.message, true);
+  }finally{
+    running = false;
+    $("btn-run").disabled = false;
+    $("btn-run").textContent = "开始重写";
+    setTimeout(() => { $("prog").className = ""; }, 1200);
+    refreshLoaded();   // 这一轮把模型拉进显存了，同步按钮状态
+  }
+}
+
+/* ---------------------------------------------------------------- 绑定 */
+$("btn-run").addEventListener("click", run);
+$("btn-clear").addEventListener("click", () => {
+  $("in").value = ""; setOut("结果会显示在这里。", true);
+  updateStats(); $("out-stat").textContent = "—";
+  $("report").className = ""; $("foot-time").textContent = "—";
+});
+$("btn-sample").addEventListener("click", () => {
+  $("in").value = /[\u4e00-\u9fff]/.test($("in").value) ? SAMPLE_EN : SAMPLE_ZH;
+  updateStats();
+});
+$("btn-copy").addEventListener("click", async () => {
+  if (!outText){ toast("还没有结果", true); return; }
+  try{ await navigator.clipboard.writeText(outText); toast("已复制"); }
+  catch(e){ toast("复制失败，请手动选中", true); }
+});
+$("btn-paste").addEventListener("click", async () => {
+  try{
+    const t = await navigator.clipboard.readText();
+    if (!t.trim()){ toast("剪贴板是空的", true); return; }
+    $("in").value = t; updateStats(); toast("已粘贴");
+  }catch(e){ toast("读剪贴板被拒，直接 Ctrl+V 吧", true); }
+});
+$("btn-unload").addEventListener("click", unloadModel);
+$("in").addEventListener("input", updateStats);
+$("in").addEventListener("keydown", (e) => {
+  // Ctrl/Cmd + Enter 直接跑
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter"){ e.preventDefault(); run(); }
+});
+
+updateStats();
+loadStatus();
+refreshLoaded();
+</script>
+</body>
+</html>

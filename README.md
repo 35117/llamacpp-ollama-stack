@@ -340,7 +340,19 @@ scripts/    桥、服务控制、驻留管理、托盘、工具链
 config/     配置模板与人格（真实人格与路径不入库）
 ui/         单文件聊天界面（零依赖）
 turtle/     示例模块：海龟汤（本地 LLM 判题，挂 /turtle）
+examples/   自定义模块接入范例（humanizer：页面 + API + 流式，未随仓库启用）
 ```
+
+## 给桥加自定义模块
+
+桥的每个 `/xxx` 前缀都能挂一个独立模块，**不新增进程、不新增端口**。
+`examples/humanizer-module/` 是一个完整范例（静态页面 + JSON API + ndjson 流式接口），
+照它的 README 走 5 个改动点就能复制出自己的模块：
+导入（`try/except`，缺了不影响桥启动）→ 前缀常量 → `_is_admin_route` 放行
+→ `_handle_admin` 分派 → 转发方法。
+
+该范例的代码是完整的，但模型权重不随仓库分发，所以本仓库默认**不启用**它
+（`/humanize` 为 404）。启用步骤与踩坑记录在同目录 `README.md` 里。
 
 ## 设计参考
 
